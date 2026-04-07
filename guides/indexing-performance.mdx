@@ -1,0 +1,242 @@
+---
+title: 'Indexing and performance'
+description: 'Understand how AGE stores graph data as PostgreSQL tables and learn which indexes to create for fast property lookups, join operations, and complex traversals.'
+---
+
+## How AGE stores graph data
+
+AGE maps each label to a PostgreSQL table inside the graph's schema. When you create a graph named `social` with a `Person` vertex label, AGE creates the table `social."Person"`. Each row in that table represents one vertex or edge.
+
+Label tables have the following structure:
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | `graphid` | Unique graph-level identifier (encodes label ID + entry ID) |
+| `properties` | `agtype` | All vertex/edge properties stored as a single agtype value |
+
+For edge tables, two additional columns exist:
+
+| Column | Type | Description |
+|---|---|---|
+| `start_id` | `graphid` | Graph ID of the source vertex |
+| `end_id` | `graphid` | Graph ID of the target vertex |
+
+You can inspect the physical tables directly:
+
+```sql
+-- List all label tables in the 'social' graph
+SELECT table_schema, table_name, table_type
+FROM information_schema.tables
+WHERE table_schema = 'social'
+ORDER BY table_name;
+
+-- Query the underlying table directly
+SELECT id, properties FROM social."Person" LIMIT 5;
+```
+
+## Default indexes
+
+AGE automatically creates a B-tree index on the `id` column for every label table, and B-tree indexes on `start_id` and `end_id` for edge tables. These indexes support the join operations AGE uses when traversing relationships between vertices.
+
+```sql
+-- Verify indexes created for a graph — from regress/sql/index.sql
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE schemaname = 'cypher_index'
+ORDER BY indexname;
+```
+
+## Creating indexes on properties
+
+Properties are stored in the `properties` `agtype` column. Two indexing strategies are available:
+
+### GIN indexes for containment queries
+
+A GIN index on the `properties` column accelerates equality lookups on property values, which is the most common pattern in Cypher `MATCH` clauses with property filters:
+
+```sql
+-- From regress/sql/index.sql
+CREATE INDEX load_city_gin_idx
+    ON social."City" USING gin (properties);
+
+CREATE INDEX load_country_gin_idx
+    ON social."Country" USING gin (properties);
+```
+
+With a GIN index in place, a query like `MATCH (c:City {city_id: 1})` uses the index rather than a sequential scan.
+
+### Expression indexes for range and comparison queries
+
+For `WHERE` clause comparisons (`<`, `>`, `<=`, `>=`) or to index a single property without loading the full GIN index, create an expression index on the property accessor:
+
+```sql
+-- From regress/sql/index.sql
+
+-- Index on the country_code string property
+CREATE INDEX city_country_code_idx ON social."City"
+    (ag_catalog.agtype_access_operator(properties, '"country_code"'::agtype));
+
+-- Index on the city_id integer property
+CREATE INDEX city_id_idx ON social."City"
+    (ag_catalog.agtype_access_operator(properties, '"city_id"'::agtype));
+
+-- Index on the west_coast boolean property
+CREATE INDEX city_west_coast_idx ON social."City"
+    (ag_catalog.agtype_access_operator(properties, '"west_coast"'::agtype));
+
+-- Index on a float property for range queries
+CREATE INDEX country_life_exp_idx ON social."Country"
+    (ag_catalog.agtype_access_operator(properties, '"life_expectancy"'::agtype));
+```
+
+Expression indexes support the full range of comparison operators in Cypher `WHERE` clauses:
+
+```sql
+-- These queries use the expression indexes above
+SELECT * FROM cypher('social', $$
+    MATCH (a:City)
+    WHERE a.country_code = 'US' AND a.west_coast = true
+    RETURN a.name
+    ORDER BY a.city_id
+$$) AS (name agtype);
+
+SELECT * FROM cypher('social', $$
+    MATCH (c:Country)
+    WHERE c.life_expectancy > 80.0
+    RETURN c.name
+$$) AS (name agtype);
+```
+
+### Unique indexes on properties
+
+```sql
+-- Enforce uniqueness on a property value
+CREATE UNIQUE INDEX person_email_uq
+    ON social."Person" (properties);
+```
+
+<Note>
+`CREATE UNIQUE INDEX ... ON label(properties)` makes the entire properties map unique. To enforce uniqueness on a single property, use an expression index combined with a partial index or a `CHECK` constraint.
+</Note>
+
+## GUC settings
+
+AGE exposes one configuration parameter that affects query planning:
+
+```sql
+-- Use the @> (containment) operator to filter MATCH patterns
+-- Default: on
+SET age.enable_containment = on;
+
+-- Use the -> (access) operator instead
+SET age.enable_containment = off;
+```
+
+When `age.enable_containment` is `on`, MATCH property filters are translated into `@>` containment checks against the `properties` column, which works well with GIN indexes. When `off`, AGE uses the `->` accessor operator, which works better with expression indexes.
+
+## Inspecting query plans with EXPLAIN
+
+Use `EXPLAIN` or `EXPLAIN ANALYZE` to see how AGE and PostgreSQL plan a graph query. You can embed `EXPLAIN` inside a Cypher query:
+
+```sql
+-- EXPLAIN inside Cypher — from regress/sql/index.sql
+SELECT * FROM cypher('social', $$
+    EXPLAIN (costs off) MATCH (c:City {city_id: 1})
+    RETURN c
+$$) AS (plan agtype);
+
+-- Or use PostgreSQL EXPLAIN on the whole statement
+EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+SELECT * FROM cypher('social', $$
+    MATCH (country:Country)<-[:has_city]-(city:City)
+    WHERE country.country_code = 'CA'
+    RETURN city.name
+$$) AS (name agtype);
+```
+
+## Performance tips
+
+<Steps>
+  <Step title="Index frequently filtered properties">
+    Create a GIN index for equality filters or an expression index for range filters on any property that appears in Cypher `WHERE` clauses or inline `{prop: val}` patterns.
+
+    ```sql
+    -- GIN index for equality lookups
+    CREATE INDEX ON social."Person" USING gin (properties);
+
+    -- Expression index for range/comparison queries
+    CREATE INDEX ON social."Person"
+        (ag_catalog.agtype_access_operator(properties, '"age"'::agtype));
+    ```
+  </Step>
+  <Step title="Always use labels in MATCH patterns">
+    Unlabeled node patterns force AGE to scan the generic vertex table across all labels. Specifying the label limits the scan to a single table:
+
+    ```sql
+    -- Slow: scans all vertex tables
+    MATCH (n) WHERE n.name = 'Alice' RETURN n
+
+    -- Fast: scans only the Person table
+    MATCH (n:Person) WHERE n.name = 'Alice' RETURN n
+    ```
+  </Step>
+  <Step title="Bound variable-length paths">
+    Variable-length path patterns like `[*]` expand recursively and can produce enormous intermediate result sets. Always set an upper bound:
+
+    ```sql
+    -- Unbounded — can be very slow on large graphs
+    MATCH (a)-[*]->(b) RETURN a, b
+
+    -- Bounded — stops at depth 5
+    MATCH (a)-[*1..5]->(b) RETURN a, b
+    ```
+  </Step>
+  <Step title="Use LIMIT to cap large result sets">
+    Adding `LIMIT` lets the planner avoid materialising the full result:
+
+    ```sql
+    SELECT * FROM cypher('social', $$
+        MATCH (p:Person)-[:KNOWS]->(friend:Person)
+        RETURN p.name, friend.name
+        LIMIT 100
+    $$) AS (person agtype, friend agtype);
+    ```
+  </Step>
+  <Step title="Run VACUUM and ANALYZE on label tables">
+    After bulk loads or large delete operations, run `VACUUM ANALYZE` on the affected label tables so the planner has accurate statistics:
+
+    ```sql
+    VACUUM ANALYZE social."Person";
+    VACUUM ANALYZE social."KNOWS";
+    ```
+
+    Without up-to-date statistics, PostgreSQL may choose sequential scans over index scans even when an index exists.
+  </Step>
+</Steps>
+
+## Join strategies
+
+AGE translates relationship traversals into SQL joins on the `id`, `start_id`, and `end_id` columns. You can tune which join strategy PostgreSQL uses with the standard planner GUCs:
+
+```sql
+-- From regress/sql/index.sql — test different join strategies
+SET enable_mergejoin = ON;
+SET enable_hashjoin  = OFF;
+SET enable_nestloop  = OFF;
+
+SELECT COUNT(*) FROM cypher('social', $$
+    MATCH (a:Country)<-[e:has_city]-()
+    RETURN e
+$$) AS (n agtype);
+```
+
+For graphs with many small labels and selective filters, nested-loop joins with index scans on `id` columns are typically fastest. For large unfiltered traversals, hash joins or merge joins over the sorted `id` columns may perform better.
+
+## Summary of index types
+
+| Index type | DDL pattern | Best for |
+|---|---|---|
+| Default B-tree on `id` | Created automatically | Join operations between vertex and edge tables |
+| GIN on `properties` | `USING gin (properties)` | Equality filters on any property (`{prop: val}`) |
+| Expression index | `(agtype_access_operator(properties, '"prop"'::agtype))` | Range queries and `WHERE` comparisons on a single property |
+| Unique index on `properties` | `CREATE UNIQUE INDEX ... (properties)` | Enforcing uniqueness across the full property map |

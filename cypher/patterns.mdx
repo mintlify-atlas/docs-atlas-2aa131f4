@@ -1,0 +1,345 @@
+---
+title: "Pattern matching"
+description: "Reference for node patterns, relationship patterns, path patterns, and variable-length paths in Apache AGE Cypher."
+---
+
+Patterns are the core of Cypher. They describe the graph shapes to find or create. A pattern consists of node elements connected by relationship elements.
+
+```cypher
+MATCH <pattern>
+RETURN <expression>
+```
+
+---
+
+## Node patterns
+
+A node element is written inside parentheses `()`.
+
+<AccordionGroup>
+  <Accordion title="Anonymous node">
+    Matches any vertex regardless of label or properties.
+
+    ```cypher
+    ()
+    ```
+
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH p=() RETURN p
+    $$) AS (p agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="Named node">
+    Binds the matched vertex to the variable `n`.
+
+    ```cypher
+    (n)
+    ```
+
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (n) RETURN n
+    $$) AS (n agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="Labeled node">
+    Matches vertices that have the given label.
+
+    ```cypher
+    (n:Label)
+    (:Label)   -- anonymous; label filter only
+    ```
+
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (n:v) RETURN n
+    $$) AS (n agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="Node with property constraint">
+    Matches vertices whose properties satisfy the inline map constraint.
+
+    ```cypher
+    (n:Label {prop: value})
+    ```
+
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (n {string_key: 'test', int_key: 1, float_key: 3.14,
+                  map_key: {key: 'value'}, list_key: [1, 2, 3]})
+        RETURN n
+    $$) AS (p agtype);
+    ```
+
+    <Note>
+      Property constraints in `MATCH` perform exact equality matching. For partial matching on nested objects or arrays, use the `age.enable_containment` configuration option.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Relationship patterns
+
+A relationship element is written between two node elements. The direction of the arrow indicates edge direction.
+
+<AccordionGroup>
+  <Accordion title="Directed (outgoing)">
+    ```cypher
+    (a)-[r]->(b)
+    (a)-[r:TYPE]->(b)
+    (a)-[r:TYPE {prop: value}]->(b)
+    ```
+
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (a:v1)-[:e1]->(b:v1)-[:e1]->(c:v1)
+        RETURN a, b, c
+    $$) AS (a agtype, b agtype, c agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="Directed (incoming)">
+    ```cypher
+    (a)<-[r]-(b)
+    (a)<-[r:TYPE]-(b)
+    ```
+
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (a:v1)<-[:e1]-(b:v1)<-[:e1]-(c:v1)
+        RETURN a, b, c
+    $$) AS (a agtype, b agtype, c agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="Undirected">
+    Matches edges in either direction.
+
+    ```cypher
+    (a)-[r]-(b)
+    (a)-[r:TYPE]-(b)
+    ```
+
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH p=(:v1)-[:e1]-(:v1)-[:e1]-(:v1)
+        RETURN p
+    $$) AS (a agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="Relationship with properties">
+    ```cypher
+    (a)-[r:TYPE {prop: value}]->(b)
+    ```
+
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH ()-[r {relationship: 'friends', years: 3}]-()
+        RETURN r
+    $$) AS (r agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="Anonymous relationship">
+    The `[]` can be omitted from the variable binding when you don't need to reference the edge.
+
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (a:v1)-[]-()-[]-()
+        RETURN a
+    $$) AS (a agtype);
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Path patterns
+
+A path is a sequence of alternating nodes and relationships. Bind a path to a variable using `p = <pattern>`.
+
+```cypher
+p = (a)-[r]->(b)-[s]->(c)
+```
+
+```sql
+SELECT * FROM cypher('cypher_create', $$
+    CREATE p=()-[:e_var]->()
+    RETURN p
+$$) AS (b agtype);
+```
+
+Use `nodes(p)` and `relationships(p)` to extract the elements of a named path:
+
+```sql
+SELECT * FROM cypher('cypher_unwind', $$
+    MATCH p=(n)-[:KNOWS]->(m)
+    UNWIND nodes(p) AS node
+    RETURN node.name
+$$) AS (i agtype);
+
+SELECT * FROM cypher('cypher_unwind', $$
+    MATCH p=(n)-[:KNOWS]->(m)
+    UNWIND relationships(p) AS relation
+    RETURN type(relation)
+$$) AS (i agtype);
+```
+
+---
+
+## Variable-length paths
+
+Variable-length paths match an arbitrary number of hops between two vertices. The hop range is specified inside the relationship element using `*`.
+
+| Syntax | Meaning |
+|--------|---------|
+| `[*]` | Any number of hops (1 or more) |
+| `[*..]` | Any number of hops (1 or more) |
+| `[*0..]` | Zero or more hops |
+| `[*1..]` | One or more hops |
+| `[*1..5]` | Between 1 and 5 hops (inclusive) |
+| `[*..5]` | Up to 5 hops |
+| `[:TYPE*]` | Any number of hops along edges of the given type |
+
+<Tabs>
+  <Tab title="Unbounded">
+    ```sql
+    SELECT * FROM cypher('cypher_vle', $$
+        MATCH (u:begin)-[*]->(v:end)
+        RETURN count(*)
+    $$) AS (e agtype);
+    ```
+  </Tab>
+  <Tab title="Fixed range">
+    ```sql
+    SELECT * FROM cypher('cypher_vle', $$
+        MATCH (u:begin)-[*1..200]->(v:end)
+        RETURN count(*)
+    $$) AS (e agtype);
+    ```
+  </Tab>
+  <Tab title="Typed hops">
+    ```sql
+    SELECT * FROM cypher('cypher_vle', $$
+        MATCH (u:begin)-[:edge*]-(v:end)
+        RETURN count(*)
+    $$) AS (e agtype);
+    ```
+  </Tab>
+  <Tab title="With property constraint">
+    ```sql
+    SELECT * FROM cypher('cypher_vle', $$
+        MATCH (u:begin)-[:edge* {name: 'main edge'}]-(v:end)
+        RETURN count(*)
+    $$) AS (e agtype);
+    ```
+  </Tab>
+  <Tab title="With length filter">
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH p=()-[*]->()
+        WHERE length(p) > 1
+        RETURN length(p)
+    $$) AS (length agtype);
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Variable-length path matching can be computationally expensive. Without bounds, it will explore all reachable paths in the graph including cycles. Always apply label constraints or upper hop bounds when working on large graphs. Undirected variable-length paths (`-[*]-`) are especially expensive and can produce very large result sets.
+</Note>
+
+---
+
+## Named paths
+
+Assign a path to a variable by prefixing the pattern with `p =`. Named paths can be used in subsequent clauses.
+
+```sql
+-- Assign a path and return it
+SELECT * FROM cypher('cypher_match', $$
+    MATCH p=(a:v1)-[]-()-[]-()
+    WHERE a.id = 'initial'
+    RETURN p
+$$) AS (p agtype);
+
+-- Use length() on a named path
+SELECT * FROM cypher('cypher_with', $$
+    MATCH p=(m)-[*1..2]->(b)
+    WITH p, length(p) AS path_length
+    WHERE path_length > 1
+    RETURN p
+$$) AS (pattern agtype);
+
+-- Access individual nodes from a named path via nodes()
+SELECT * FROM cypher('cypher_match', $$
+    MATCH p=()-[*]->()
+    WHERE size(nodes(p)) = 3
+    RETURN nodes(p)[0]
+$$) AS (nodes agtype);
+```
+
+---
+
+## Pattern predicates in WHERE
+
+Use a pattern inside a `WHERE` clause as a predicate to filter based on graph structure without binding the matched elements.
+
+```sql
+-- Vertices that have at least one outgoing edge
+SELECT * FROM cypher('cypher_match', $$
+    MATCH (u) WHERE EXISTS((u)-[]->())
+    RETURN u
+$$) AS (u agtype);
+
+-- Vertices connected to a specific destination
+SELECT * FROM cypher('cypher_match', $$
+    MATCH (u) WHERE EXISTS((u)-[]->({id: 'middle'}))
+    RETURN u
+$$) AS (u agtype);
+
+-- Negative predicate: vertices with no outgoing edges
+SELECT * FROM cypher('cypher_match', $$
+    MATCH (f), (t)
+    WHERE NOT EXISTS((f)-[]->(t))
+    RETURN f.name, t.name
+$$) AS (f agtype, t agtype);
+```
+
+---
+
+## Multiple patterns in MATCH
+
+A single `MATCH` can specify multiple comma-separated patterns. All patterns must match simultaneously (a cross product subject to shared variables).
+
+```sql
+-- Two independent patterns: Cartesian product
+SELECT * FROM cypher('cypher_match', $$
+    MATCH (a:v), p=()-[]->()-[]->()
+    RETURN a.i, p
+$$) AS (i agtype, p agtype);
+
+-- Shared variable ties the patterns together
+SELECT * FROM cypher('cypher_match', $$
+    MATCH (a:v1)-[]->(), ()-[]->(a)
+    RETURN a
+$$) AS (a agtype);
+
+-- Multiple independent paths with WHERE
+SELECT * FROM cypher('cypher_match', $$
+    MATCH con_path=(a)-[]->()<-[]-(),
+          div_path=(b)<-[]-()-[]->()
+    WHERE a.id = 'initial' AND b.id = 'initial'
+    RETURN con_path, div_path
+$$) AS (con_path agtype, div_path agtype);
+```
+
+<Note>
+  Variables used in more than one pattern within the same `MATCH` clause are treated as equality constraints — the same graph element must satisfy all occurrences of the variable.
+</Note>

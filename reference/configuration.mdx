@@ -1,0 +1,193 @@
+---
+title: "Configuration"
+description: "Configure Apache AGE for your PostgreSQL environment, including session setup, GUC parameters, and non-superuser access."
+---
+
+## Extension setup
+
+Every session that uses AGE requires three commands to initialize the extension:
+
+```sql
+CREATE EXTENSION age;
+LOAD 'age';
+SET search_path = ag_catalog, "$user", public;
+```
+
+<Note>
+`CREATE EXTENSION age` only needs to run once per database. `LOAD 'age'` and `SET search_path` must be run at the start of each session.
+</Note>
+
+### Why `LOAD 'age'` is required
+
+AGE ships as a dynamically loadable shared library (`age.so`). PostgreSQL does not automatically load extension shared libraries at session start unless they are listed in `shared_preload_libraries`. Running `LOAD 'age'` explicitly loads the library into the current session, registering AGE's custom types, operators, and hooks.
+
+If you add `age` to `shared_preload_libraries` in `postgresql.conf`, you can omit `LOAD 'age'` from each session:
+
+```ini
+# postgresql.conf
+shared_preload_libraries = 'age'
+```
+
+<Tip>
+Adding AGE to `shared_preload_libraries` is the recommended approach for production deployments. It ensures the library is loaded for every session automatically, including background workers.
+</Tip>
+
+### Why `search_path` must include `ag_catalog`
+
+AGE installs all its types, functions, and operators into the `ag_catalog` schema (set by `schema = 'ag_catalog'` in `age.control`). Cypher queries reference these objects by unqualified name at runtime, so `ag_catalog` must appear in `search_path` for the session to resolve them.
+
+Without `ag_catalog` in `search_path`, Cypher queries will fail with errors such as `function cypher(...) does not exist`.
+
+**Setting `search_path` per session:**
+
+```sql
+SET search_path = ag_catalog, "$user", public;
+```
+
+**Making it permanent for a specific user:**
+
+```sql
+ALTER USER myuser SET search_path = ag_catalog, "$user", public;
+```
+
+**Making it the database default:**
+
+```sql
+ALTER DATABASE mydb SET search_path = ag_catalog, "$user", public;
+```
+
+**Setting it globally in `postgresql.conf`:**
+
+```ini
+search_path = 'ag_catalog, "$user", public'
+```
+
+<Warning>
+If `search_path` is set only in a session (via `SET`), it resets to the default when the session ends. Use `ALTER USER`, `ALTER DATABASE`, or `postgresql.conf` for a persistent setting.
+</Warning>
+
+---
+
+## AGE-specific GUC parameters
+
+AGE defines one custom GUC parameter in `src/backend/utils/ag_guc.c`. You can set it per session, per user, or in `postgresql.conf`.
+
+### `age.enable_containment`
+
+| Property | Value |
+|---|---|
+| Type | `boolean` |
+| Default | `on` |
+| Context | `SUSET` (superuser, per session) |
+
+Controls whether AGE uses the `@>` containment operator to transform `MATCH` clause filters. When enabled (the default), AGE rewrites property filter expressions using `@>`, which can leverage GIN indexes on `agtype` columns. When disabled, AGE uses the `->` accessor operator instead.
+
+```sql
+-- Disable containment-based filter transformation for this session
+SET age.enable_containment = off;
+
+-- Re-enable it
+SET age.enable_containment = on;
+```
+
+To set it permanently in `postgresql.conf`:
+
+```ini
+age.enable_containment = on
+```
+
+---
+
+## Non-superuser setup
+
+`CREATE EXTENSION age` requires superuser privileges because it installs objects into `ag_catalog` and registers a shared library. Non-superuser roles can use AGE after a superuser installs it, but they need explicit grants.
+
+<Steps>
+  <Step title="Install the extension as a superuser">
+    ```sql
+    -- Run as a superuser
+    CREATE EXTENSION age;
+    ```
+  </Step>
+
+  <Step title="Grant USAGE on ag_catalog">
+    ```sql
+    GRANT USAGE ON SCHEMA ag_catalog TO myrole;
+    ```
+  </Step>
+
+  <Step title="Grant privileges on ag_catalog objects">
+    Grant `EXECUTE` on all functions and `SELECT` on tables and sequences that the role needs:
+
+    ```sql
+    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ag_catalog TO myrole;
+    GRANT SELECT ON ALL TABLES IN SCHEMA ag_catalog TO myrole;
+    ```
+  </Step>
+
+  <Step title="Grant access to graph schemas">
+    Each graph is stored in its own PostgreSQL schema. Grant the role access to each graph schema and its label tables:
+
+    ```sql
+    -- Replace 'my_graph' with your graph name
+    GRANT USAGE ON SCHEMA my_graph TO myrole;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA my_graph TO myrole;
+    ```
+  </Step>
+</Steps>
+
+### Loading AGE from non-superuser driver connections
+
+Some database drivers or connection poolers connect as a non-superuser role. If `age` is not in `shared_preload_libraries`, calling `LOAD 'age'` as a non-superuser requires the `pg_load_from_plugins` role (PostgreSQL 16+) or superuser access.
+
+The cleanest solution for non-superuser connections is to add AGE to `shared_preload_libraries`:
+
+```ini
+# postgresql.conf
+shared_preload_libraries = 'age'
+```
+
+This makes the library available to all sessions without requiring `LOAD 'age'` in application code.
+
+---
+
+## PostgreSQL settings for graph workloads
+
+These standard PostgreSQL settings have a meaningful impact on AGE performance for complex graph queries.
+
+### `work_mem`
+
+Controls the amount of memory used for sort operations and hash tables before spilling to disk. Graph traversals and Cypher queries that involve ordering, aggregation, or path operations benefit from higher values.
+
+```ini
+# postgresql.conf
+work_mem = 64MB
+```
+
+You can also set it per session for a specific query:
+
+```sql
+SET work_mem = '128MB';
+```
+
+<Warning>
+`work_mem` applies per sort/hash operation, and a single complex query may allocate it multiple times in parallel. Set this conservatively on shared servers. A value of 16–64 MB is reasonable for most graph workloads.
+</Warning>
+
+### `shared_buffers`
+
+The PostgreSQL shared buffer cache. Larger graphs benefit from a larger buffer cache to reduce disk I/O when traversing label tables. The standard recommendation is 25% of total system RAM.
+
+```ini
+# postgresql.conf
+shared_buffers = 4GB
+```
+
+### `max_parallel_workers_per_gather`
+
+Many AGE functions are marked `PARALLEL SAFE`, including the edge uniqueness enforcement functions added in 1.7.0. Increasing this setting allows PostgreSQL to parallelize qualifying graph scans.
+
+```ini
+# postgresql.conf
+max_parallel_workers_per_gather = 4
+```

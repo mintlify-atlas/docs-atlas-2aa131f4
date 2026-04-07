@@ -1,0 +1,250 @@
+---
+title: 'Hybrid SQL + Cypher queries'
+description: 'Combine Cypher graph traversals with standard SQL by using the cypher() set-returning function inside SELECT, JOIN, CTE, and subquery expressions.'
+---
+
+## Overview
+
+AGE exposes graph queries to PostgreSQL through the `cypher()` function, which is defined as:
+
+```sql
+-- from sql/age_query.sql
+CREATE FUNCTION ag_catalog.cypher(
+    graph_name   name    = NULL,
+    query_string cstring = NULL,
+    params       agtype  = NULL
+)
+    RETURNS SETOF record
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+```
+
+Because `cypher()` returns `SETOF record`, PostgreSQL treats it like a table-valued function. Every place you can use a subquery or a function call in a `FROM` clause, you can use `cypher()`.
+
+<Warning>
+`cypher()` **must** appear in a `FROM` clause and **must** be followed by an `AS` clause that names every projected column and declares its type. Omitting the column definition list causes a runtime error.
+</Warning>
+
+## Basic pattern
+
+```sql
+LOAD 'age';
+SET search_path TO ag_catalog;
+
+SELECT * FROM cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN n
+$$) AS (n agtype);
+```
+
+All columns returned by Cypher are typed as `agtype` unless you explicitly cast them. You may use any number of projected columns — the alias count must match the `RETURN` items exactly.
+
+```sql
+-- Multiple return columns — from regress/sql/cypher.sql
+SELECT * FROM cypher('my_graph', $$
+    MATCH p=(u)-[e]->(v)
+    RETURN u, e, v, p
+$$) AS (u agtype, e agtype, v agtype, p agtype);
+```
+
+<Note>
+Dollar-quoting (`$$`) is required. Passing the query string as a regular string literal or as a variable causes an error, as the parser needs to see a dollar-quoted constant at planning time.
+</Note>
+
+## Filtering with a WHERE clause on cypher() output
+
+Wrap `cypher()` in a subquery and filter at the SQL level, or let Cypher handle the filter internally. Both approaches work:
+
+<Tabs>
+  <Tab title="Filter in Cypher">
+    ```sql
+    SELECT * FROM cypher('social', $$
+        MATCH (p:Person)
+        WHERE p.age > 30
+        RETURN p.name, p.age
+    $$) AS (name agtype, age agtype);
+    ```
+  </Tab>
+  <Tab title="Filter in SQL">
+    ```sql
+    SELECT name, age
+    FROM cypher('social', $$
+        MATCH (p:Person)
+        RETURN p.name, p.age
+    $$) AS (name agtype, age agtype)
+    WHERE age::text::int > 30;
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+Pushing filters into the Cypher clause lets the graph engine prune the traversal early. SQL-level filters are applied after all rows are returned from the graph engine.
+</Tip>
+
+## Joining cypher() results with PostgreSQL tables
+
+Because `cypher()` is a set-returning function, you can `JOIN` its output against any ordinary table:
+
+```sql
+-- Graph returns person_id + name; SQL table holds account details
+SELECT u.email, graph_data.name
+FROM users u
+JOIN (
+    SELECT *
+    FROM cypher('social', $$
+        MATCH (p:Person)
+        RETURN p.id, p.name
+    $$) AS (person_id agtype, name agtype)
+) AS graph_data
+  ON u.id = graph_data.person_id::text::int;
+```
+
+The cast chain `::text::int` converts an `agtype` integer value to a PostgreSQL `int`. See [type casting](#type-casting-agtype-to-postgresql-types) below for more detail.
+
+## Using CTEs to combine SQL and graph data
+
+CTEs (the `WITH` clause) let you name intermediate results and reference them in both SQL and subsequent Cypher calls:
+
+```sql
+-- Step 1: pull high-value customers from the SQL table
+WITH vip_customers AS (
+    SELECT id, email
+    FROM customers
+    WHERE tier = 'gold'
+),
+-- Step 2: find their graph connections
+graph_results AS (
+    SELECT person_id, friend_name
+    FROM cypher('social', $$
+        MATCH (p:Person)-[:KNOWS]->(friend:Person)
+        RETURN p.id, friend.name
+    $$) AS (person_id agtype, friend_name agtype)
+)
+SELECT v.email, g.friend_name
+FROM vip_customers v
+JOIN graph_results g ON v.id = g.person_id::text::int;
+```
+
+<Tip>
+CTEs that reference `cypher()` are evaluated as subqueries. You can reference a CTE result in a later `cypher()` `params` argument to pass values into the graph query.
+</Tip>
+
+## Passing parameters from SQL into Cypher
+
+The third argument to `cypher()` is an `agtype` map of named parameters. Use it to avoid string interpolation and to pass values computed in SQL into the graph query:
+
+```sql
+SELECT * FROM cypher(
+    'social',
+    $$
+        MATCH (p:Person {name: $name})
+        RETURN p.name, p.age
+    $$,
+    '{"name": "Alice"}'
+) AS (name agtype, age agtype);
+```
+
+Parameters are referenced with the `$param_name` syntax inside the Cypher query. The `params` value must be a valid `agtype` object (map).
+
+<CodeGroup>
+
+```sql passing a SQL variable
+-- Pass a value derived from SQL into Cypher
+DO $$
+DECLARE
+    target_name text := 'Alice';
+    params_json text;
+BEGIN
+    params_json := format('{"name": "%s"}', target_name);
+    PERFORM * FROM cypher(
+        'social',
+        $cypher$ MATCH (p:Person {name: $name}) RETURN p $cypher$,
+        params_json::agtype
+    ) AS (p agtype);
+END;
+$$;
+```
+
+```sql passing from a CTE
+WITH inputs(params) AS (
+    VALUES ('{"name": "Alice"}'::agtype)
+)
+SELECT g.*
+FROM inputs,
+     cypher('social', $$
+         MATCH (p:Person {name: $name}) RETURN p.name, p.age
+     $$, inputs.params) AS g(name agtype, age agtype);
+```
+
+</CodeGroup>
+
+## Aggregating and sorting graph results in SQL
+
+Apply standard SQL aggregate functions and `ORDER BY` to the output of `cypher()`:
+
+```sql
+SELECT name, COUNT(*) AS friend_count
+FROM cypher('social', $$
+    MATCH (p:Person)-[:KNOWS]->(friend:Person)
+    RETURN p.name, friend.name
+$$) AS (name agtype, friend_name agtype)
+GROUP BY name
+ORDER BY friend_count DESC
+LIMIT 10;
+```
+
+## Storing cypher() output in a table
+
+```sql
+-- from regress/sql/cypher.sql — create table from graph query output
+CREATE TABLE my_vertices AS (
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (u) RETURN u
+    $$) AS (u agtype)
+);
+```
+
+## Type casting: agtype to PostgreSQL types
+
+`agtype` values must be cast before they can be used in SQL expressions that expect native PostgreSQL types.
+
+| Agtype value | Cast pattern | Result type |
+|---|---|---|
+| Integer | `val::text::int` | `integer` |
+| Float | `val::text::float8` | `double precision` |
+| Boolean | `val::text::boolean` | `boolean` |
+| String | `val::text` | `text` (strips surrounding quotes) |
+
+```sql
+SELECT
+    name::text                     AS name_text,
+    age::text::int                 AS age_int,
+    score::text::float8            AS score_float,
+    active::text::boolean          AS active_bool
+FROM cypher('social', $$
+    MATCH (p:Person)
+    RETURN p.name, p.age, p.score, p.active
+$$) AS (name agtype, age agtype, score agtype, active agtype);
+```
+
+<Note>
+Agtype string values include their surrounding double-quotes when cast directly to `text` via `::text`. Strip them by casting to `text` and then using `trim(both '"' from val)`, or simply cast through `text` as shown in the table above — PostgreSQL's text conversion for agtype already strips the quotes for scalar string values.
+</Note>
+
+## Using cypher() in a subquery
+
+`cypher()` can appear anywhere a subquery is valid, including in correlated contexts:
+
+```sql
+-- Scalar subquery — returns a single agtype value
+SELECT
+    u.email,
+    (SELECT name FROM cypher('social', $$
+         MATCH (p:Person {id: $uid}) RETURN p.name
+     $$, format('{"uid": %s}', u.id)::agtype) AS t(name agtype))::text
+FROM users u;
+```
+
+<Warning>
+Each call to `cypher()` is a separate query against the graph. Avoid calling `cypher()` inside a correlated subquery that executes once per row of a large outer table — prefer a `JOIN` or a CTE that runs `cypher()` once.
+</Warning>

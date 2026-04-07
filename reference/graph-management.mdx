@@ -1,0 +1,421 @@
+---
+title: "Graph management functions"
+description: "SQL functions and catalog tables for creating, modifying, and querying graphs in Apache AGE."
+---
+
+All functions and tables live in the `ag_catalog` schema. Set `search_path` to include `ag_catalog` or qualify function names explicitly.
+
+```sql
+SET search_path = ag_catalog, "$user", public;
+```
+
+## Catalog tables
+
+<AccordionGroup>
+  <Accordion title="ag_graph">
+    Stores one row per graph created with `create_graph`.
+
+    | Column      | Type           | Description                                    |
+    | ----------- | -------------- | ---------------------------------------------- |
+    | `graphid`   | `oid`          | Unique object identifier for the graph.        |
+    | `name`      | `name`         | Name of the graph.                             |
+    | `namespace` | `regnamespace` | PostgreSQL schema that holds the graph's data. |
+
+    ```sql
+    SELECT * FROM ag_catalog.ag_graph;
+    ```
+  </Accordion>
+  <Accordion title="ag_label">
+    Stores one row per vertex or edge label.
+
+    | Column     | Type         | Description                                              |
+    | ---------- | ------------ | -------------------------------------------------------- |
+    | `name`     | `name`       | Label name.                                              |
+    | `graph`    | `oid`        | Foreign key to `ag_graph.graphid`.                       |
+    | `id`       | `label_id`   | Numeric label identifier (1–65535).                      |
+    | `kind`     | `label_kind` | `'v'` for vertex labels, `'e'` for edge labels.          |
+    | `relation` | `regclass`   | Underlying PostgreSQL table storing the label's records. |
+    | `seq_name` | `name`       | Name of the sequence used to generate graphids.          |
+
+    ```sql
+    SELECT name, kind FROM ag_catalog.ag_label WHERE graph = (
+      SELECT graphid FROM ag_catalog.ag_graph WHERE name = 'my_graph'
+    );
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Graph lifecycle
+
+### create_graph
+
+```sql
+ag_catalog.create_graph(graph_name name) → void
+```
+
+Creates a new graph. A dedicated PostgreSQL schema is created to store the graph's labels and sequences.
+
+<ParamField path="graph_name" type="name" required>
+  Name for the new graph. Must be unique across all graphs in the database.
+</ParamField>
+
+**Returns:** `void`
+
+```sql
+SELECT ag_catalog.create_graph('my_graph');
+```
+
+---
+
+### drop_graph
+
+```sql
+ag_catalog.drop_graph(graph_name name, cascade boolean = false) → void
+```
+
+Drops an existing graph and all its labels.
+
+<ParamField path="graph_name" type="name" required>
+  Name of the graph to drop.
+</ParamField>
+
+<ParamField path="cascade" type="boolean" default="false">
+  When `true`, automatically drops all objects that depend on the graph (labels, sequences, and the underlying schema). When `false`, the call fails if any dependent objects exist.
+</ParamField>
+
+**Returns:** `void`
+
+<Warning>
+  `cascade = true` permanently deletes all vertices, edges, and labels in the graph. This action cannot be undone.
+</Warning>
+
+```sql
+-- Drop graph only if it has no dependents
+SELECT ag_catalog.drop_graph('my_graph');
+
+-- Drop graph and all its data
+SELECT ag_catalog.drop_graph('my_graph', true);
+```
+
+---
+
+### alter_graph
+
+```sql
+ag_catalog.alter_graph(graph_name name, operation cstring, new_value name) → void
+```
+
+Alters a property of an existing graph.
+
+<ParamField path="graph_name" type="name" required>
+  Name of the graph to alter.
+</ParamField>
+
+<ParamField path="operation" type="cstring" required>
+  The operation to perform. Currently only `'RENAME'` is supported.
+</ParamField>
+
+<ParamField path="new_value" type="name" required>
+  The new value for the property. For `'RENAME'`, this is the new graph name.
+</ParamField>
+
+**Returns:** `void`
+
+```sql
+SELECT ag_catalog.alter_graph('old_name', 'RENAME', 'new_name');
+```
+
+---
+
+### graph_exists
+
+```sql
+ag_catalog.graph_exists(graph_name name) → agtype
+```
+
+Returns `true` as an `agtype` value if a graph with the given name exists, `false` otherwise.
+
+<ParamField path="graph_name" type="name" required>
+  Name of the graph to check.
+</ParamField>
+
+**Returns:** `agtype` — `true` or `false`
+
+```sql
+SELECT ag_catalog.graph_exists('my_graph');
+```
+
+---
+
+## Label management
+
+### create_vlabel
+
+```sql
+ag_catalog.create_vlabel(graph_name cstring, label_name cstring) → void
+```
+
+Creates a new vertex label in the specified graph.
+
+<ParamField path="graph_name" type="cstring" required>
+  Name of the graph in which to create the label.
+</ParamField>
+
+<ParamField path="label_name" type="cstring" required>
+  Name for the new vertex label.
+</ParamField>
+
+**Returns:** `void`
+
+```sql
+SELECT ag_catalog.create_vlabel('my_graph', 'Person');
+```
+
+---
+
+### create_elabel
+
+```sql
+ag_catalog.create_elabel(graph_name cstring, label_name cstring) → void
+```
+
+Creates a new edge label in the specified graph.
+
+<ParamField path="graph_name" type="cstring" required>
+  Name of the graph in which to create the label.
+</ParamField>
+
+<ParamField path="label_name" type="cstring" required>
+  Name for the new edge label.
+</ParamField>
+
+**Returns:** `void`
+
+```sql
+SELECT ag_catalog.create_elabel('my_graph', 'KNOWS');
+```
+
+---
+
+### drop_label
+
+```sql
+ag_catalog.drop_label(graph_name name, label_name name, force boolean = false) → void
+```
+
+Drops a label (vertex or edge) from a graph.
+
+<ParamField path="graph_name" type="name" required>
+  Name of the graph containing the label.
+</ParamField>
+
+<ParamField path="label_name" type="name" required>
+  Name of the label to drop.
+</ParamField>
+
+<ParamField path="force" type="boolean" default="false">
+  When `true`, drops the label even if it contains data. When `false`, the call fails if any rows exist in the label.
+</ParamField>
+
+**Returns:** `void`
+
+```sql
+-- Drop an empty label
+SELECT ag_catalog.drop_label('my_graph', 'Person');
+
+-- Force-drop a label that may contain data
+SELECT ag_catalog.drop_label('my_graph', 'Person', true);
+```
+
+---
+
+## Bulk data loading
+
+### load_labels_from_file
+
+```sql
+ag_catalog.load_labels_from_file(
+    graph_name      name,
+    label_name      name,
+    file_path       text,
+    id_field_exists bool DEFAULT true,
+    load_as_agtype  bool DEFAULT false
+) → void
+```
+
+Bulk-loads vertex labels from a CSV file. The CSV must have a header row. Each data row becomes one vertex.
+
+<ParamField path="graph_name" type="name" required>
+  Name of the target graph.
+</ParamField>
+
+<ParamField path="label_name" type="name" required>
+  Vertex label to load data into. The label must already exist.
+</ParamField>
+
+<ParamField path="file_path" type="text" required>
+  Absolute path to the CSV file on the PostgreSQL server's filesystem.
+</ParamField>
+
+<ParamField path="id_field_exists" type="bool" default="true">
+  When `true`, the first column of the CSV is treated as the vertex ID. When `false`, IDs are generated automatically.
+</ParamField>
+
+<ParamField path="load_as_agtype" type="bool" default="false">
+  When `true`, property values are loaded as `agtype`. When `false`, all values are loaded as strings.
+</ParamField>
+
+**Returns:** `void`
+
+<Note>
+  The CSV file must be readable by the PostgreSQL server process, not the client.
+</Note>
+
+```sql
+-- CSV with an explicit ID column; values loaded as strings
+SELECT ag_catalog.load_labels_from_file(
+    'my_graph',
+    'Person',
+    '/data/persons.csv'
+);
+
+-- No ID column; values loaded as agtype
+SELECT ag_catalog.load_labels_from_file(
+    'my_graph',
+    'Person',
+    '/data/persons.csv',
+    false,
+    true
+);
+```
+
+---
+
+### load_edges_from_file
+
+```sql
+ag_catalog.load_edges_from_file(
+    graph_name     name,
+    label_name     name,
+    file_path      text,
+    load_as_agtype bool DEFAULT false
+) → void
+```
+
+Bulk-loads edges from a CSV file. The CSV must include `start_id` and `end_id` columns that reference existing vertex IDs.
+
+<ParamField path="graph_name" type="name" required>
+  Name of the target graph.
+</ParamField>
+
+<ParamField path="label_name" type="name" required>
+  Edge label to load data into. The label must already exist.
+</ParamField>
+
+<ParamField path="file_path" type="text" required>
+  Absolute path to the CSV file on the PostgreSQL server's filesystem.
+</ParamField>
+
+<ParamField path="load_as_agtype" type="bool" default="false">
+  When `true`, property values are loaded as `agtype`. When `false`, all values are loaded as strings.
+</ParamField>
+
+**Returns:** `void`
+
+```sql
+SELECT ag_catalog.load_edges_from_file(
+    'my_graph',
+    'KNOWS',
+    '/data/knows.csv'
+);
+```
+
+---
+
+## Query execution
+
+### cypher
+
+```sql
+ag_catalog.cypher(
+    graph_name   name    DEFAULT NULL,
+    query_string cstring DEFAULT NULL,
+    params       agtype  DEFAULT NULL
+) → SETOF record
+```
+
+Executes a Cypher query against the named graph and returns a set of records. Each projected expression in the Cypher `RETURN` clause maps to one column in the result.
+
+<ParamField path="graph_name" type="name" required>
+  Name of the graph to query.
+</ParamField>
+
+<ParamField path="query_string" type="cstring" required>
+  A Cypher query string. Must be a string literal — parameterized queries use the `params` argument.
+</ParamField>
+
+<ParamField path="params" type="agtype" default="NULL">
+  An `agtype` object of query parameters referenced in the Cypher string with `$param_name` syntax.
+</ParamField>
+
+**Returns:** `SETOF record`
+
+<Note>
+  You must provide an `AS` clause that names every column and declares it as `agtype`. The number of aliases must match the number of expressions in the Cypher `RETURN` clause.
+</Note>
+
+```sql
+-- Basic MATCH query
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN n.name, n.age
+$$) AS (name agtype, age agtype);
+
+-- CREATE with returned data
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    CREATE (n:Person {name: 'Alice', age: 30})
+    RETURN n
+$$) AS (n agtype);
+
+-- Parameterized query
+SELECT * FROM ag_catalog.cypher(
+    'my_graph',
+    $$ MATCH (n:Person {name: $name}) RETURN n $$,
+    '{"name": "Alice"}'
+) AS (n agtype);
+```
+
+---
+
+### get_cypher_keywords
+
+```sql
+ag_catalog.get_cypher_keywords(
+    OUT word     text,
+    OUT catcode  "char",
+    OUT catdesc  text
+) → SETOF record
+```
+
+Returns all reserved Cypher keywords recognized by the parser, together with their category code and description.
+
+**Returns:** `SETOF record` with columns:
+
+<ResponseField name="word" type="text">
+  The keyword string (e.g., `MATCH`, `RETURN`, `WHERE`).
+</ResponseField>
+
+<ResponseField name="catcode" type="char">
+  Single-character category code used internally by the parser.
+</ResponseField>
+
+<ResponseField name="catdesc" type="text">
+  Human-readable description of the keyword category.
+</ResponseField>
+
+```sql
+SELECT * FROM ag_catalog.get_cypher_keywords()
+ORDER BY word;
+```

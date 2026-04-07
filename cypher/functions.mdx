@@ -1,0 +1,546 @@
+---
+title: "Built-in functions"
+description: "Reference for all built-in scalar, string, and aggregate functions available in Apache AGE Cypher queries."
+---
+
+Apache AGE provides built-in functions for working with graph elements, strings, and aggregations. All functions operate on the `agtype` data type, which is the universal type used for graph data in AGE.
+
+Functions are called directly inside Cypher expressions within `SELECT * FROM cypher(...)` queries.
+
+<Note>
+  Function names in AGE are case-sensitive. Use the Cypher-standard casing shown below (e.g., `toUpper`, not `TOUPPER`).
+</Note>
+
+---
+
+## Scalar functions
+
+Functions that operate on individual graph elements and values.
+
+<AccordionGroup>
+  <Accordion title="id(vertex | edge) → agtype">
+    Returns the internal graph ID of a vertex or edge.
+
+    **Source:** `ag_catalog.age_id(agtype)`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        CREATE (a)-[b:e_var {id: 0}]->()
+        RETURN a, b, id(b)
+    $$) AS (a agtype, b agtype, c agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="start_id(edge) → agtype">
+    Returns the ID of the source vertex of an edge.
+
+    **Source:** `ag_catalog.age_start_id(agtype)`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH ()-[e]->()
+        RETURN e, start_id(e)
+    $$) AS (e agtype, start_id agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="end_id(edge) → agtype">
+    Returns the ID of the destination vertex of an edge.
+
+    **Source:** `ag_catalog.age_end_id(agtype)`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH ()-[e]->()
+        RETURN e, end_id(e)
+    $$) AS (e agtype, end_id agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="head(list) → agtype">
+    Returns the first element of a list. Returns `null` if the list is empty.
+
+    **Source:** `ag_catalog.age_head(agtype)`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN head([1, 2, 3])
+    $$) AS (head agtype);
+    -- Returns: 1
+    ```
+  </Accordion>
+
+  <Accordion title="last(list) → agtype">
+    Returns the last element of a list. Returns `null` if the list is empty.
+
+    **Source:** `ag_catalog.age_last(agtype)`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN last([1, 2, 3])
+    $$) AS (last agtype);
+    -- Returns: 3
+    ```
+  </Accordion>
+
+  <Accordion title="tail(list) → agtype">
+    Returns all elements of a list except the first element. Returns an empty list if the list has one or fewer elements.
+
+    **Source:** `ag_catalog.age_tail(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN tail([1, 2, 3])
+    $$) AS (tail agtype);
+    -- Returns: [2, 3]
+    ```
+  </Accordion>
+
+  <Accordion title="properties(vertex | edge) → agtype">
+    Returns all properties of a vertex or edge as a map.
+
+    **Source:** `ag_catalog.age_properties(agtype)`
+
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (u) RETURN EXISTS(u.id), properties(u)
+    $$) AS (exists agtype, properties agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="startNode(edge) → agtype">
+    Returns the source vertex of an edge as a full vertex object.
+
+    **Source:** `ag_catalog.age_startnode(agtype, agtype)` — requires graph context; STABLE volatility.
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH ()-[e]->()
+        RETURN startNode(e)
+    $$) AS (start_node agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="endNode(edge) → agtype">
+    Returns the destination vertex of an edge as a full vertex object.
+
+    **Source:** `ag_catalog.age_endnode(agtype, agtype)` — requires graph context; STABLE volatility.
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH ()-[e]->()
+        RETURN endNode(e)
+    $$) AS (end_node agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="length(path) → agtype">
+    Returns the number of relationships in a path.
+
+    **Source:** `ag_catalog.age_length(agtype)`
+
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH p=()-[*]->()
+        WHERE length(p) > 1
+        RETURN length(p)
+    $$) AS (length agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="size(list | string) → agtype">
+    Returns the number of elements in a list, or the number of characters in a string.
+
+    **Source:** `ag_catalog.age_size(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH p=()-[*]->()
+        WHERE size(nodes(p)) = 3
+        RETURN nodes(p)[0]
+    $$) AS (nodes agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="type(edge) → agtype">
+    Returns the label (type) of an edge as a string.
+
+    **Source:** `ag_catalog.age_type(agtype)` — STABLE volatility.
+
+    ```sql
+    SELECT * FROM cypher('cypher_with', $$
+        MATCH (n)-[e]->(m)
+        WITH n.name AS n1, e AS edge, m.name AS n2
+        RETURN n1, label(edge), n2
+    $$) AS (start_node agtype, edge agtype, end_node agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="label(vertex | edge) → agtype">
+    Returns the label of a vertex or edge as a string.
+
+    **Source:** `ag_catalog.age_label(agtype)` — STABLE volatility.
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (n)-[e]->(m)
+        RETURN label(n), label(e), label(m)
+    $$) AS (n_label agtype, e_label agtype, m_label agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="toBoolean(value) → agtype">
+    Converts a value to a boolean. Returns `null` on `null` input.
+
+    **Source:** `ag_catalog.age_toboolean(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN toBoolean('true'), toBoolean(1)
+    $$) AS (a agtype, b agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="toFloat(value) → agtype">
+    Converts a value to a floating-point number.
+
+    **Source:** `ag_catalog.age_tofloat(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN toFloat('3.14')
+    $$) AS (f agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="toInteger(value) → agtype">
+    Converts a value to an integer.
+
+    **Source:** `ag_catalog.age_tointeger(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN toInteger('42')
+    $$) AS (i agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="toString(value) → agtype">
+    Converts a value to a string.
+
+    **Source:** `ag_catalog.age_tostring("any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (n)
+        RETURN toString(n.age)
+    $$) AS (age_str agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="exists(property) → boolean">
+    Returns `true` if the given property exists on the entity (is not `null`).
+
+    **Source:** `ag_catalog.age_exists(agtype)` — STABLE volatility.
+
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (u) WHERE EXISTS(u.id)
+        RETURN u
+    $$) AS (u agtype);
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## String functions
+
+Functions that operate on string values.
+
+<AccordionGroup>
+  <Accordion title="reverse(string) → agtype">
+    Returns the characters of the string in reverse order.
+
+    **Source:** `ag_catalog.age_reverse(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN reverse('hello')
+    $$) AS (reversed agtype);
+    -- Returns: "olleh"
+    ```
+  </Accordion>
+
+  <Accordion title="toUpper(string) → agtype">
+    Returns the string converted to uppercase.
+
+    **Source:** `ag_catalog.age_toupper(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('cypher_with', $$
+        MATCH (george {name: 'George'})<-[]-(otherPerson)
+        WITH otherPerson, toUpper(otherPerson.name) AS upperCaseName
+        WHERE upperCaseName STARTS WITH 'C'
+        RETURN otherPerson.name
+    $$) AS (name agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="toLower(string) → agtype">
+    Returns the string converted to lowercase.
+
+    **Source:** `ag_catalog.age_tolower(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (n:Person)
+        RETURN toLower(n.name)
+    $$) AS (lower_name agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="lTrim(string) → agtype">
+    Returns the string with leading whitespace removed.
+
+    **Source:** `ag_catalog.age_ltrim(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN lTrim('   hello')
+    $$) AS (trimmed agtype);
+    -- Returns: "hello"
+    ```
+  </Accordion>
+
+  <Accordion title="rTrim(string) → agtype">
+    Returns the string with trailing whitespace removed.
+
+    **Source:** `ag_catalog.age_rtrim(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN rTrim('hello   ')
+    $$) AS (trimmed agtype);
+    -- Returns: "hello"
+    ```
+  </Accordion>
+
+  <Accordion title="trim(string) → agtype">
+    Returns the string with leading and trailing whitespace removed.
+
+    **Source:** `ag_catalog.age_trim(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN trim('  hello  ')
+    $$) AS (trimmed agtype);
+    -- Returns: "hello"
+    ```
+  </Accordion>
+
+  <Accordion title="right(string, count) → agtype">
+    Returns the last `count` characters of the string. Returns `null` if `count` is `null`.
+
+    **Source:** `ag_catalog.age_right(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN right('hello', 3)
+    $$) AS (result agtype);
+    -- Returns: "llo"
+    ```
+  </Accordion>
+
+  <Accordion title="left(string, count) → agtype">
+    Returns the first `count` characters of the string. Returns `null` if `count` is `null`.
+
+    **Source:** `ag_catalog.age_left(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN left('hello', 3)
+    $$) AS (result agtype);
+    -- Returns: "hel"
+    ```
+  </Accordion>
+
+  <Accordion title="substring(string, start [, length]) → agtype">
+    Returns a substring beginning at `start` (zero-based). If `length` is omitted, returns the rest of the string.
+
+    **Source:** `ag_catalog.age_substring(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN substring('hello world', 6, 5)
+    $$) AS (result agtype);
+    -- Returns: "world"
+    ```
+  </Accordion>
+
+  <Accordion title="split(string, delimiter) → agtype">
+    Splits the string at each occurrence of `delimiter` and returns a list of substrings.
+
+    **Source:** `ag_catalog.age_split(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN split('a,b,c', ',')
+    $$) AS (result agtype);
+    -- Returns: ["a", "b", "c"]
+    ```
+  </Accordion>
+
+  <Accordion title="replace(string, search, replacement) → agtype">
+    Returns the string with all occurrences of `search` replaced by `replacement`.
+
+    **Source:** `ag_catalog.age_replace(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        RETURN replace('hello world', 'world', 'AGE')
+    $$) AS (result agtype);
+    -- Returns: "hello AGE"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Aggregate functions
+
+Aggregate functions reduce a set of values to a single result. They are used in `RETURN` or `WITH` clauses, typically with grouping.
+
+<AccordionGroup>
+  <Accordion title="count(expression) → agtype">
+    Returns the number of non-null values. `count(*)` counts all rows including nulls.
+
+    **Source:** Built-in Cypher aggregate (no separate `ag_catalog` SQL function)
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (n:Part)
+        RETURN count(*)
+    $$) AS (result agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="collect(expression) → agtype">
+    Collects all non-null values into a list. Returns an empty list if there are no results.
+
+    **Source:** `ag_catalog.age_collect(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('cypher_with', $$
+        MATCH (n)
+        WITH n
+        ORDER BY n.name DESC LIMIT 3
+        RETURN collect(n.name)
+    $$) AS (names agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="sum(expression) → agtype">
+    Returns the sum of all non-null numeric values.
+
+    **Source:** `ag_catalog.age_sum(agtype)`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (n:Order)
+        RETURN sum(n.amount)
+    $$) AS (total agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="avg(expression) → agtype">
+    Returns the average of all non-null numeric values.
+
+    **Source:** `ag_catalog.age_avg(agtype)`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (n:Person)
+        RETURN avg(n.age)
+    $$) AS (avg_age agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="min(expression) → agtype">
+    Returns the minimum value among all non-null values. Works on numbers, strings, and lists.
+
+    **Source:** `ag_catalog.age_min(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (n:Person)
+        RETURN min(n.age)
+    $$) AS (min_age agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="max(expression) → agtype">
+    Returns the maximum value among all non-null values. Works on numbers, strings, and lists.
+
+    **Source:** `ag_catalog.age_max(variadic "any")`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (n:Person)
+        RETURN max(n.age)
+    $$) AS (max_age agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="stdev(expression) → agtype">
+    Returns the sample standard deviation of numeric values. Returns `0` (not `null`) when there is only one value.
+
+    **Source:** `ag_catalog.age_stdev(agtype)`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (n:Person)
+        RETURN stdev(n.age)
+    $$) AS (stdev agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="stdevp(expression) → agtype">
+    Returns the population standard deviation of numeric values. Returns `0` (not `null`) when there is only one value.
+
+    **Source:** `ag_catalog.age_stdevp(agtype)`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (n:Person)
+        RETURN stdevp(n.age)
+    $$) AS (stdevp agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="percentileCont(expression, percentile) → agtype">
+    Returns the interpolated percentile value over a group of numbers. `percentile` must be between 0.0 and 1.0.
+
+    **Source:** `ag_catalog.age_percentilecont(agtype, agtype)`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (n:Person)
+        RETURN percentileCont(n.age, 0.5)
+    $$) AS (median agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="percentileDisc(expression, percentile) → agtype">
+    Returns the nearest discrete percentile value over a group of numbers. `percentile` must be between 0.0 and 1.0.
+
+    **Source:** `ag_catalog.age_percentiledisc(agtype, agtype)`
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (n:Person)
+        RETURN percentileDisc(n.age, 0.5)
+    $$) AS (median agtype);
+    ```
+  </Accordion>
+</AccordionGroup>

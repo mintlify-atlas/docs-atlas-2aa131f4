@@ -1,0 +1,109 @@
+{
+  "projectType": "data-platform",
+  "projectName": "Apache AGE",
+  "projectDescription": "A PostgreSQL extension that adds graph database capabilities, enabling openCypher queries alongside standard SQL for multi-model data processing.",
+  "theme": "aspen",
+  "primaryColor": "#2D6A9F",
+  "lightColor": "#5B9BD5",
+  "darkColor": "#1A4A72",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/graph-model",
+              "concepts/agtype",
+              "concepts/cypher-queries"
+            ]
+          },
+          {
+            "group": "Cypher Query Language",
+            "pages": [
+              "cypher/clauses",
+              "cypher/functions",
+              "cypher/patterns"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/hybrid-queries",
+              "guides/data-loading",
+              "guides/indexing-performance"
+            ]
+          },
+          {
+            "group": "Language Drivers",
+            "pages": [
+              "drivers/overview",
+              "drivers/python",
+              "drivers/golang",
+              "drivers/java",
+              "drivers/nodejs"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "SQL Functions",
+            "pages": [
+              "reference/graph-management",
+              "reference/scalar-functions",
+              "reference/string-functions",
+              "reference/aggregate-functions"
+            ]
+          },
+          {
+            "group": "Configuration & Admin",
+            "pages": [
+              "reference/configuration",
+              "reference/docker",
+              "reference/upgrading"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "openCypher query language support within PostgreSQL",
+    "Hybrid SQL + Cypher querying in the same statement",
+    "Multi-graph querying and hierarchical label organization",
+    "Property indexes on vertices (nodes) and edges",
+    "Custom agtype data type for graph data (similar to JSONB)",
+    "Built-in drivers for Python, Go, Java, and Node.js",
+    "Docker support for quick deployment",
+    "Full PostgreSQL feature compatibility (backup, replication, security)"
+  ],
+  "publicApiSurface": [
+    "ag_catalog.create_graph(graph_name name)",
+    "ag_catalog.drop_graph(graph_name name, cascade boolean)",
+    "ag_catalog.cypher(graph_name name, query_string cstring, params agtype)",
+    "ag_catalog.create_vlabel(graph_name cstring, label_name cstring)",
+    "ag_catalog.create_elabel(graph_name cstring, label_name cstring)",
+    "ag_catalog.drop_label(graph_name name, label_name name, force boolean)",
+    "ag_catalog.alter_graph(graph_name name, operation cstring, new_value name)",
+    "ag_catalog.load_labels_from_file(graph_name name, label_name name, file_path text)",
+    "ag_catalog.load_edges_from_file(graph_name name, label_name name, file_path text)",
+    "ag_catalog.graph_exists(graph_name name)",
+    "ag_catalog.get_cypher_keywords()",
+    "agtype (custom PostgreSQL type for graph data)",
+    "graphid (unique identifier type for graph entities)",
+    "ag_graph (catalog table for graphs)",
+    "ag_label (catalog table for vertex/edge labels)"
+  ]
+}

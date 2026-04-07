@@ -1,0 +1,153 @@
+---
+title: "Installation"
+description: "Install Apache AGE using Docker or build it from source on Linux or macOS."
+---
+
+<Note>
+  Apache AGE supports PostgreSQL versions **11, 12, 13, 14, 15, 16, 17, and 18**. The current release is v1.7.0.
+</Note>
+
+<Warning>
+  You must use a compatible PostgreSQL version. AGE does not support PostgreSQL versions outside the 11–18 range. Run `pg_config` to confirm your installed version before building.
+</Warning>
+
+<Tabs>
+  <Tab title="Docker">
+    Docker is the fastest way to get AGE running. The official image is based on PostgreSQL 18 with AGE pre-installed.
+
+    <Steps>
+      <Step title="Pull the image">
+        ```bash
+        docker pull apache/age
+        ```
+      </Step>
+
+      <Step title="Start the container">
+        ```bash
+        docker run \
+            --name age  \
+            -p 5455:5432 \
+            -e POSTGRES_USER=postgresUser \
+            -e POSTGRES_PASSWORD=postgresPW \
+            -e POSTGRES_DB=postgresDB \
+            -d \
+            apache/age
+        ```
+
+        This maps port `5455` on your host to PostgreSQL's default port `5432` inside the container.
+      </Step>
+
+      <Step title="Connect to the database">
+        Open a `psql` session inside the running container:
+
+        ```bash
+        docker exec -it age psql -d postgresDB -U postgresUser
+        ```
+      </Step>
+
+      <Step title="Load the extension">
+        Run these statements to activate AGE in your session:
+
+        ```sql
+        CREATE EXTENSION age;
+        LOAD 'age';
+        SET search_path = ag_catalog, "$user", public;
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Build from source">
+    <Steps>
+      <Step title="Install build prerequisites">
+        Install the required libraries for your operating system:
+
+        <CodeGroup>
+          ```bash CentOS
+          yum install gcc glibc glib-common readline readline-devel zlib zlib-devel flex bison
+          ```
+
+          ```bash Fedora
+          dnf install gcc glibc bison flex readline readline-devel zlib zlib-devel
+          ```
+
+          ```bash Ubuntu / Debian
+          sudo apt-get install build-essential libreadline-dev zlib1g-dev flex bison
+          ```
+        </CodeGroup>
+      </Step>
+
+      <Step title="Install PostgreSQL">
+        Install a compatible version of PostgreSQL (11–18). You can use your operating system's package manager:
+
+        ```bash
+        sudo apt install postgresql
+        ```
+
+        Or download and build from source using the [official PostgreSQL documentation](https://www.postgresql.org/docs/18/installation.html).
+      </Step>
+
+      <Step title="Get the AGE source code">
+        Clone the repository from GitHub or download an official release tarball:
+
+        ```bash
+        git clone https://github.com/apache/age.git
+        cd age
+        ```
+      </Step>
+
+      <Step title="Verify your PostgreSQL version">
+        Run `pg_config` to confirm the version of PostgreSQL that AGE will build against:
+
+        ```bash
+        pg_config
+        ```
+
+        <Tip>
+          The output includes `VERSION` near the top. Ensure it shows PostgreSQL 11 through 18.
+        </Tip>
+      </Step>
+
+      <Step title="Build and install AGE">
+        Run `make install` from the AGE source directory:
+
+        ```bash
+        make install
+        ```
+
+        If the path to your PostgreSQL installation is not in `PATH`, specify it explicitly:
+
+        ```bash
+        make PG_CONFIG=/path/to/postgres/bin/pg_config install
+        ```
+      </Step>
+
+      <Step title="Load the extension">
+        For every database connection where you want to use AGE, run:
+
+        ```sql
+        CREATE EXTENSION age;
+        LOAD 'age';
+        SET search_path = ag_catalog, "$user", public;
+        ```
+
+        `CREATE EXTENSION age` only needs to run once per database. The `LOAD` and `SET search_path` statements are required at the start of each new connection.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Verify the installation
+
+After loading the extension, confirm AGE is active by creating a graph:
+
+```sql
+SELECT create_graph('test_graph');
+```
+
+If the command completes without error, AGE is installed and working correctly.
+
+## Next steps
+
+- Follow the [Quick start](/quickstart) to create vertices, edges, and run your first Cypher queries.
+- Read about the [graph model](/concepts/graph-model) to understand how AGE represents data.

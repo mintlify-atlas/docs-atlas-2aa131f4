@@ -1,0 +1,264 @@
+---
+title: 'Loading data'
+description: 'Create graphs, labels, and vertices/edges programmatically with Cypher or in bulk from CSV files using load_labels_from_file and load_edges_from_file.'
+---
+
+## Overview
+
+AGE provides two complementary approaches for populating a graph:
+
+- **Programmatic creation** — use Cypher `CREATE` statements inside `cypher()` calls. Best for small datasets and for setting up test fixtures.
+- **Bulk file loading** — use `load_labels_from_file` and `load_edges_from_file` to import CSV files. Best for large datasets.
+
+## Setting up the extension
+
+```sql
+LOAD 'age';
+SET search_path TO ag_catalog;
+```
+
+<Note>
+`SET search_path TO ag_catalog` makes all AGE catalog functions available without schema qualification. You can omit it and use fully-qualified names like `ag_catalog.create_graph(...)` instead.
+</Note>
+
+## Creating a graph
+
+```sql
+SELECT create_graph('my_graph');
+```
+
+A graph creates a dedicated PostgreSQL schema with the same name. All label tables for that graph live inside that schema.
+
+To remove a graph and all its data:
+
+```sql
+-- cascade=true drops all label tables as well
+SELECT drop_graph('my_graph', true);
+```
+
+## Creating labels
+
+Labels must exist before you can load data into them. AGE creates the `_ag_label_vertex` and `_ag_label_edge` base labels automatically, but you must explicitly create any custom labels.
+
+<Tabs>
+  <Tab title="Vertex labels">
+    ```sql
+    SELECT create_vlabel('my_graph', 'Person');
+    SELECT create_vlabel('my_graph', 'City');
+    ```
+  </Tab>
+  <Tab title="Edge labels">
+    ```sql
+    SELECT create_elabel('my_graph', 'KNOWS');
+    SELECT create_elabel('my_graph', 'has_city');
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+`load_labels_from_file` creates the vertex label automatically if it does not already exist. `load_edges_from_file` requires the edge label to exist beforehand — call `create_elabel` first.
+</Note>
+
+## Programmatic creation with Cypher
+
+Use `CREATE` inside a `cypher()` call to insert vertices and edges directly:
+
+```sql
+-- Create individual nodes
+SELECT * FROM cypher('my_graph', $$
+    CREATE (:Person {name: 'Alice', age: 30})
+$$) AS (result agtype);
+
+-- Create nodes and an edge in one statement
+SELECT * FROM cypher('my_graph', $$
+    CREATE (:Person {name: 'Bob'})-[:KNOWS]->(:Person {name: 'Carol'})
+$$) AS (result agtype);
+```
+
+### Bulk creation with UNWIND
+
+Use `UNWIND` to insert many vertices from an agtype list in a single Cypher call:
+
+```sql
+SELECT * FROM cypher('my_graph', $$
+    UNWIND [
+        {name: 'Alice', age: 30},
+        {name: 'Bob',   age: 25},
+        {name: 'Carol', age: 35}
+    ] AS props
+    CREATE (:Person {name: props.name, age: props.age})
+$$) AS (result agtype);
+```
+
+## Bulk loading vertices from a CSV file
+
+```sql
+-- Signature (from sql/age_main.sql):
+-- load_labels_from_file(
+--     graph_name     name,
+--     label_name     name,
+--     file_path      text,
+--     id_field_exists bool  default true,
+--     load_as_agtype  bool  default false
+-- )
+SELECT load_labels_from_file(
+    'my_graph',
+    'Country',
+    'age_load/countries.csv',
+    true    -- first column is the vertex ID
+);
+```
+
+### CSV format for vertices
+
+The CSV file must have a header row. When `id_field_exists` is `true`, the **first column** is treated as the vertex's integer ID and the remaining columns become properties:
+
+```csv
+id,name,iso2,region
+1,Belgium,BE,Europe
+2,Canada,CA,Americas
+```
+
+When `id_field_exists` is `false`, AGE uses the label's sequence to assign IDs automatically and all columns become properties:
+
+```csv
+name,iso2,region
+Belgium,BE,Europe
+Canada,CA,Americas
+```
+
+### The load_as_agtype parameter
+
+| `load_as_agtype` | Behaviour |
+|---|---|
+| `false` (default) | All property values are stored as agtype strings. Numbers and booleans must be cast later. |
+| `true` | Values are parsed as agtype so numbers become integers/floats and booleans become booleans. |
+
+```sql
+-- Properties stored with correct native types
+SELECT load_labels_from_file(
+    'agload_conversion',
+    'Person1',
+    'age_load/conversion_vertices.csv',
+    true,   -- id_field_exists
+    true    -- load_as_agtype
+);
+```
+
+<CodeGroup>
+
+```sql with id field
+-- countries.csv has an integer id as its first column
+SELECT load_labels_from_file(
+    'agload_test_graph',
+    'Country',
+    'age_load/countries.csv',
+    true   -- id_field_exists = true
+);
+```
+
+```sql without id field
+-- Let AGE assign IDs from the sequence
+SELECT load_labels_from_file(
+    'agload_test_graph',
+    'Country2',
+    'age_load/countries.csv',
+    false  -- id_field_exists = false
+);
+```
+
+</CodeGroup>
+
+## Bulk loading edges from a CSV file
+
+```sql
+-- Signature (from sql/age_main.sql):
+-- load_edges_from_file(
+--     graph_name     name,
+--     label_name     name,
+--     file_path      text,
+--     load_as_agtype bool default false
+-- )
+
+-- Create the edge label first
+SELECT create_elabel('agload_test_graph', 'has_city');
+
+-- Load the edges
+SELECT load_edges_from_file(
+    'agload_test_graph',
+    'has_city',
+    'age_load/edges.csv'
+);
+```
+
+### CSV format for edges
+
+Edge CSV files must have `start_id` and `end_id` as the **first two columns**. These values reference the integer IDs of existing vertices. Remaining columns become edge properties:
+
+```csv
+start_id,end_id,weight,since
+1,101,1.5,2020
+1,102,0.8,2021
+```
+
+<Warning>
+Passing a vertex label name to `load_edges_from_file` (or an edge label name to `load_labels_from_file`) raises an error. Labels are typed — always use the correct function for the label kind.
+</Warning>
+
+## File path rules
+
+<Warning>
+File paths are resolved relative to the PostgreSQL server's data directory, not the client's working directory. The file must be readable by the OS user running the PostgreSQL server process.
+
+The calling user must have the `pg_read_server_files` role. Paths that attempt to escape the sandbox (e.g., `../../etc/passwd`) are rejected. Only `.csv` files are accepted.
+</Warning>
+
+```sql
+-- Absolute paths are supported
+SELECT load_labels_from_file(
+    'my_graph',
+    'Person',
+    '/data/imports/people.csv',
+    true
+);
+```
+
+## Required permissions
+
+| Permission | Required for |
+|---|---|
+| `pg_read_server_files` role | Reading the CSV file |
+| `INSERT` on the label table | Writing rows |
+| `UPDATE` on the label's sequence | Advancing the ID sequence |
+| `SELECT` on `ag_catalog.ag_label` and `ag_catalog.ag_graph` | Resolving label metadata |
+
+<Note>
+Row-Level Security (RLS) on a label table blocks bulk loads even when the user has `INSERT` privileges. Disable RLS on the target table before loading, or load as a superuser.
+</Note>
+
+## Verifying loaded data
+
+After loading, query the label tables directly or use Cypher:
+
+```sql
+-- Direct table count
+SELECT COUNT(*) FROM agload_test_graph."Country";
+SELECT COUNT(*) FROM agload_test_graph."has_city";
+
+-- Via Cypher
+SELECT COUNT(*) FROM cypher('agload_test_graph', $$
+    MATCH (n) RETURN n
+$$) AS (n agtype);
+
+SELECT COUNT(*) FROM cypher('agload_test_graph', $$
+    MATCH (a)-[e]->(b) RETURN e
+$$) AS (e agtype);
+```
+
+## Transaction isolation during bulk loads
+
+<Warning>
+Bulk loads run inside a single transaction. If the load fails partway through (for example, due to a duplicate ID), the entire load is rolled back. Re-loading the same file with `id_field_exists = true` after a partial failure will succeed because no rows were committed.
+
+For very large files, consider splitting the data into smaller batches and loading each batch in its own transaction.
+</Warning>

@@ -1,0 +1,273 @@
+---
+title: "String functions"
+description: "Cypher string functions implemented in ag_catalog for transforming and extracting text from agtype values."
+---
+
+String functions accept `agtype` string arguments and return `agtype` values. All SQL implementations are in the `ag_catalog` schema, use `VARIADIC "any"` signatures, and are declared `IMMUTABLE PARALLEL SAFE`.
+
+All functions return `NULL` when passed a `NULL` input.
+
+---
+
+## Case and whitespace
+
+### toUpper
+
+```sql
+ag_catalog.age_toupper(VARIADIC "any") → agtype
+```
+
+Converts a string to upper case.
+
+| Cypher name | SQL name                        |
+| ----------- | ------------------------------- |
+| `toUpper()` | `age_toupper(VARIADIC "any")`   |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN toUpper('hello world')
+$$) AS (result agtype);
+-- "HELLO WORLD"
+```
+
+---
+
+### toLower
+
+```sql
+ag_catalog.age_tolower(VARIADIC "any") → agtype
+```
+
+Converts a string to lower case.
+
+| Cypher name | SQL name                        |
+| ----------- | ------------------------------- |
+| `toLower()` | `age_tolower(VARIADIC "any")`   |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN toLower('Hello World')
+$$) AS (result agtype);
+-- "hello world"
+```
+
+---
+
+### lTrim
+
+```sql
+ag_catalog.age_ltrim(VARIADIC "any") → agtype
+```
+
+Removes leading whitespace from a string.
+
+| Cypher name | SQL name                      |
+| ----------- | ----------------------------- |
+| `lTrim()`   | `age_ltrim(VARIADIC "any")`   |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN lTrim('   hello')
+$$) AS (result agtype);
+-- "hello"
+```
+
+---
+
+### rTrim
+
+```sql
+ag_catalog.age_rtrim(VARIADIC "any") → agtype
+```
+
+Removes trailing whitespace from a string.
+
+| Cypher name | SQL name                      |
+| ----------- | ----------------------------- |
+| `rTrim()`   | `age_rtrim(VARIADIC "any")`   |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN rTrim('hello   ')
+$$) AS (result agtype);
+-- "hello"
+```
+
+---
+
+### trim
+
+```sql
+ag_catalog.age_trim(VARIADIC "any") → agtype
+```
+
+Removes both leading and trailing whitespace from a string.
+
+| Cypher name | SQL name                     |
+| ----------- | ---------------------------- |
+| `trim()`    | `age_trim(VARIADIC "any")`   |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN trim('  hello world  ')
+$$) AS (result agtype);
+-- "hello world"
+```
+
+---
+
+## Reversal
+
+### reverse
+
+```sql
+ag_catalog.age_reverse(VARIADIC "any") → agtype
+```
+
+Returns the string with its characters in reverse order.
+
+| Cypher name | SQL name                        |
+| ----------- | ------------------------------- |
+| `reverse()` | `age_reverse(VARIADIC "any")`   |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN reverse('Apache AGE')
+$$) AS (result agtype);
+-- "EGA ehcapA"
+```
+
+---
+
+## Substring extraction
+
+### left
+
+```sql
+ag_catalog.age_left(VARIADIC "any") → agtype
+```
+
+Returns the first `count` characters of a string.
+
+| Cypher name | SQL name                      |
+| ----------- | ----------------------------- |
+| `left()`    | `age_left(VARIADIC "any")`    |
+
+<Tip>
+  Pass the string as the first argument and the character count as the second.
+</Tip>
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN left('Apache AGE', 6)
+$$) AS (result agtype);
+-- "Apache"
+```
+
+---
+
+### right
+
+```sql
+ag_catalog.age_right(VARIADIC "any") → agtype
+```
+
+Returns the last `count` characters of a string.
+
+| Cypher name | SQL name                      |
+| ----------- | ----------------------------- |
+| `right()`   | `age_right(VARIADIC "any")`   |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN right('Apache AGE', 3)
+$$) AS (result agtype);
+-- "AGE"
+```
+
+---
+
+### substring
+
+```sql
+ag_catalog.age_substring(VARIADIC "any") → agtype
+```
+
+Returns a portion of a string starting at a zero-based index with an optional length.
+
+| Cypher name   | SQL name                          |
+| ------------- | --------------------------------- |
+| `substring()` | `age_substring(VARIADIC "any")`   |
+
+```sql
+-- substring(string, start)
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN substring('Apache AGE', 7)
+$$) AS (result agtype);
+-- "AGE"
+
+-- substring(string, start, length)
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN substring('Apache AGE', 0, 6)
+$$) AS (result agtype);
+-- "Apache"
+```
+
+---
+
+## Splitting and joining
+
+### split
+
+```sql
+ag_catalog.age_split(VARIADIC "any") → agtype
+```
+
+Splits a string on a delimiter and returns an `agtype` list of substrings.
+
+| Cypher name | SQL name                      |
+| ----------- | ----------------------------- |
+| `split()`   | `age_split(VARIADIC "any")`   |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN split('a,b,c', ',')
+$$) AS (result agtype);
+-- ["a", "b", "c"]
+```
+
+---
+
+## Replacement
+
+### replace
+
+```sql
+ag_catalog.age_replace(VARIADIC "any") → agtype
+```
+
+Returns a string with all occurrences of a search string replaced by a replacement string.
+
+| Cypher name | SQL name                        |
+| ----------- | ------------------------------- |
+| `replace()` | `age_replace(VARIADIC "any")`   |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN replace('Hello World', 'World', 'AGE')
+$$) AS (result agtype);
+-- "Hello AGE"
+```
+
+---
+
+## Usage with vertex properties
+
+String functions compose naturally with property access inside a Cypher query:
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN n.name, toUpper(n.name), trim(n.email)
+$$) AS (name agtype, upper_name agtype, email agtype);
+```

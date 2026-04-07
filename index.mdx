@@ -1,97 +1,100 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Apache AGE"
+description: "Graph database extension for PostgreSQL — run openCypher queries alongside standard SQL."
 ---
 
-## Setting up
+Apache AGE (A Graph Extension) brings graph database capabilities directly into PostgreSQL. Query your data with openCypher or SQL — or mix both in the same statement — without leaving your existing database infrastructure.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Create your first graph and run Cypher queries in minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Installation" icon="download" href="/installation">
+    Install AGE from source, package manager, or Docker.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Cypher Query Language" icon="code" href="/cypher/clauses">
+    Learn the openCypher clauses, functions, and patterns supported by AGE.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Language Drivers" icon="plug" href="/drivers/overview">
+    Connect from Python, Go, Java, Node.js, and more.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What is Apache AGE?
 
-Everything you need to create world-class documentation.
+Apache AGE is a PostgreSQL extension that enables you to use a graph database on top of your existing relational database. The name stands for **A Graph Extension**, inspired by Bitnine's AgensGraph.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+The core idea: a **single storage** that handles both relational and graph data. You can use standard ANSI SQL alongside openCypher — one of the most popular graph query languages — in the same database and even the same query.
 
-## Need inspiration?
+<CardGroup cols={3}>
+  <Card title="Graph model" icon="diagram-project" href="/concepts/graph-model">
+    Vertices, edges, labels, and properties explained.
+  </Card>
+  <Card title="agtype" icon="brackets-curly" href="/concepts/agtype">
+    AGE's flexible graph data type built on PostgreSQL.
+  </Card>
+  <Card title="Hybrid queries" icon="merge" href="/guides/hybrid-queries">
+    Combine SQL and Cypher in a single statement.
+  </Card>
+</CardGroup>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+## Key features
+
+- **openCypher support** — write expressive graph queries with `MATCH`, `CREATE`, `MERGE`, `DELETE`, and more
+- **Hybrid querying** — call `cypher()` inside any SQL query; join graph results with relational tables
+- **Multiple graphs** — create and query multiple named graphs in one database
+- **Property indexes** — B-tree and GIN indexes on vertex and edge properties for fast lookups
+- **Full PostgreSQL compatibility** — backups, replication, roles, and extensions all work as expected
+- **Language drivers** — official drivers for Python, Go, Java (JDBC), and Node.js
+
+## Get started
+
+<Steps>
+  <Step title="Install AGE">
+    Pull the Docker image or build from source. See the [installation guide](/installation) for all options.
+
+    ```bash
+    docker pull apache/age
+    docker run --name age -p 5455:5432 \
+      -e POSTGRES_USER=postgresUser \
+      -e POSTGRES_PASSWORD=postgresPW \
+      -e POSTGRES_DB=postgresDB \
+      -d apache/age
+    ```
+  </Step>
+  <Step title="Load the extension">
+    Connect to your database and enable AGE for your session.
+
+    ```sql
+    CREATE EXTENSION age;
+    LOAD 'age';
+    SET search_path = ag_catalog, "$user", public;
+    ```
+  </Step>
+  <Step title="Create a graph">
+    Use `create_graph` to create a named graph, then run your first Cypher query.
+
+    ```sql
+    SELECT create_graph('my_graph');
+
+    SELECT * FROM cypher('my_graph', $$
+      CREATE (n:Person {name: 'Alice', age: 30})
+      RETURN n
+    $$) AS (n agtype);
+    ```
+  </Step>
+  <Step title="Query your data">
+    Match patterns, traverse relationships, and return results.
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+      MATCH (a:Person)-[r:KNOWS]->(b:Person)
+      RETURN a.name, b.name, r.since
+    $$) AS (person1 agtype, person2 agtype, since agtype);
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  Apache AGE supports PostgreSQL versions 11 through 18. Make sure your PostgreSQL version is compatible before installing.
+</Note>

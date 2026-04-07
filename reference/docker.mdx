@@ -1,0 +1,219 @@
+---
+title: "Docker deployment"
+description: "Run Apache AGE in a container using the official Docker image, including quick start, environment variables, volumes, and custom builds."
+---
+
+## Official image
+
+The official Apache AGE Docker image is published as `apache/age`. It is built on top of the official `postgres:18` image with AGE pre-compiled and installed.
+
+```bash
+docker pull apache/age
+```
+
+---
+
+## Quick start
+
+```bash
+docker run \
+  --name age \
+  -p 5455:5432 \
+  -e POSTGRES_USER=postgresUser \
+  -e POSTGRES_PASSWORD=postgresPW \
+  -e POSTGRES_DB=postgresDB \
+  -d \
+  apache/age
+```
+
+**Flag breakdown:**
+
+| Flag | Description |
+|---|---|
+| `--name age` | Assigns a name to the container for easy reference with `docker exec`, `docker stop`, etc. |
+| `-p 5455:5432` | Maps port 5455 on the host to port 5432 inside the container (PostgreSQL's default port). Connect your client to `localhost:5455`. |
+| `-e POSTGRES_USER=...` | Sets the superuser role name created on first startup. |
+| `-e POSTGRES_PASSWORD=...` | Sets the password for the superuser role. |
+| `-e POSTGRES_DB=...` | Creates a database with this name on first startup. |
+| `-d` | Runs the container in detached (background) mode. |
+
+---
+
+## Environment variables
+
+The AGE image inherits all environment variables from the official `postgres` image.
+
+| Variable | Required | Description |
+|---|---|---|
+| `POSTGRES_USER` | Yes | Name of the superuser role created on initialization. Defaults to `postgres` if omitted. |
+| `POSTGRES_PASSWORD` | Yes | Password for the superuser. The container will not start without this unless `POSTGRES_HOST_AUTH_METHOD` is set. |
+| `POSTGRES_DB` | No | Name of the default database to create. Defaults to the value of `POSTGRES_USER` if omitted. |
+| `POSTGRES_HOST_AUTH_METHOD` | No | Authentication method for `host` connections in `pg_hba.conf`. Set to `trust` for development-only no-password access (not recommended for production). |
+| `PGDATA` | No | Directory inside the container where PostgreSQL stores its data. Defaults to `/var/lib/postgresql/data`. |
+| `LANG` | — | Set to `en_US.UTF-8` in the image. Do not override unless you need a different locale. |
+
+---
+
+## Connecting to the container
+
+Once the container is running, open a `psql` shell inside it:
+
+```bash
+docker exec -it age psql -d postgresDB -U postgresUser
+```
+
+From the `psql` prompt, you can run Cypher queries immediately. The AGE extension is already created by the init script, so only the session commands are needed:
+
+```sql
+LOAD 'age';
+SET search_path = ag_catalog, "$user", public;
+
+SELECT * FROM cypher('my_graph', $$
+  CREATE (:Person {name: 'Alice'})
+$$) AS (result agtype);
+```
+
+---
+
+## Persisting data with volumes
+
+By default, data written inside a container is lost when the container is removed. Mount a host directory to persist your PostgreSQL data:
+
+```bash
+docker run \
+  --name age \
+  -p 5455:5432 \
+  -e POSTGRES_USER=postgresUser \
+  -e POSTGRES_PASSWORD=postgresPW \
+  -e POSTGRES_DB=postgresDB \
+  -v /my/local/path:/var/lib/postgresql/data \
+  -d \
+  apache/age
+```
+
+Replace `/my/local/path` with an absolute path on your host machine. PostgreSQL will store all data files there, and the data will survive container restarts and removal.
+
+<Note>
+On first startup, PostgreSQL initializes the data directory. If you mount a non-empty directory, PostgreSQL will use the existing data without re-initializing.
+</Note>
+
+---
+
+## Port mapping
+
+PostgreSQL inside the container always listens on port **5432**. The `-p` flag maps a host port to that container port:
+
+```text
+-p <host_port>:<container_port>
+-p 5455:5432
+```
+
+Connect your PostgreSQL client (psql, pgAdmin, a driver) to `localhost:5455`. Using a non-standard host port (like 5455) avoids conflicts if you have a local PostgreSQL installation already listening on 5432.
+
+---
+
+## Docker Compose
+
+Use Docker Compose to manage the AGE container alongside application services:
+
+```yaml docker-compose.yml
+version: "3.8"
+
+services:
+  age:
+    image: apache/age
+    environment:
+      POSTGRES_USER: postgresUser
+      POSTGRES_PASSWORD: postgresPW
+      POSTGRES_DB: postgresDB
+    ports:
+      - "5455:5432"
+    volumes:
+      - age_data:/var/lib/postgresql/data
+
+volumes:
+  age_data:
+```
+
+Start the stack:
+
+```bash
+docker compose up -d
+```
+
+---
+
+## Initialization script
+
+The official image includes an initialization script at `/docker-entrypoint-initdb.d/00-create-extension-age.sql`. The `postgres` image entrypoint runs all `.sql` files in that directory on first startup (when the data directory is empty).
+
+The script contains:
+
+```sql
+CREATE EXTENSION age;
+```
+
+This means the AGE extension is automatically created in `POSTGRES_DB` on first startup. You do not need to run `CREATE EXTENSION age` manually when using the official image.
+
+<Note>
+The init script only runs on the very first startup when the data directory is empty. If you mount an existing data directory, the script is skipped.
+</Note>
+
+The container also starts PostgreSQL with `shared_preload_libraries=age`:
+
+```text
+CMD ["postgres", "-c", "shared_preload_libraries=age"]
+```
+
+This loads the AGE shared library automatically for every session, so you only need to run `SET search_path` — not `LOAD 'age'` — in your application connections.
+
+---
+
+## Building a custom image
+
+Use `Dockerfile.dev` as a starting point when you need to build from source with development tools included. This image compiles AGE from the local source tree and runs the full regression test suite (`make installcheck`).
+
+```dockerfile Dockerfile.dev
+FROM postgres:18
+
+RUN apt-get update
+RUN apt-get install --assume-yes --no-install-recommends --no-install-suggests \
+  bison \
+  build-essential \
+  flex \
+  postgresql-server-dev-18 \
+  locales
+
+ENV LANG=en_US.UTF-8
+ENV LC_COLLATE=en_US.UTF-8
+ENV LC_CTYPE=en_US.UTF-8
+
+RUN echo "en_US.UTF-8 UTF-8" > /etc/locale.gen \
+    && locale-gen \
+    && update-locale LANG=en_US.UTF-8
+
+COPY . /age
+WORKDIR /age
+RUN make install
+
+RUN chown -R postgres /age
+USER postgres
+
+RUN make installcheck
+
+COPY docker/docker-entrypoint-initdb.d/00-create-extension-age.sql /docker-entrypoint-initdb.d/00-create-extension-age.sql
+
+CMD ["postgres", "-c", "shared_preload_libraries=age"]
+```
+
+Build from the repository root:
+
+```bash
+docker build -f docker/Dockerfile.dev -t age-dev .
+```
+
+<Warning>
+`Dockerfile.dev` runs `make installcheck` during the build. This starts a temporary PostgreSQL instance and runs the full regression suite. The build will fail if any tests fail, which is by design for CI validation.
+</Warning>
+
+The production `Dockerfile` uses a multi-stage build to keep the final image small: it compiles AGE in a `build` stage with all development tools, then copies only the compiled `.so`, SQL, and control files into a clean `postgres:18` final image.

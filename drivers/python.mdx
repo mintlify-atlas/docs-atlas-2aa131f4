@@ -1,0 +1,263 @@
+---
+title: "Python driver"
+description: "Connect to Apache AGE from Python using psycopg3, with agtype parsing and optional NetworkX integration."
+---
+
+The Python driver provides agtype parsing and Cypher query support for Apache AGE on top of the [psycopg3](https://www.psycopg.org/) PostgreSQL driver. It unmarshals AGE result data into `Vertex`, `Edge`, and `Path` objects and optionally integrates with [NetworkX](https://networkx.org/) for graph analysis.
+
+## Prerequisites
+
+- Python 3.9 or later
+- `psycopg` (psycopg3)
+- `antlr4-python3-runtime==4.11.1`
+- System packages: `python3-dev`, `libpq-dev`
+
+## Installation
+
+<Steps>
+  <Step title="Install system dependencies">
+    ```bash
+    sudo apt-get update
+    sudo apt-get install python3-dev libpq-dev
+    ```
+  </Step>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/apache/age.git
+    cd age/drivers/python
+    ```
+  </Step>
+  <Step title="Install Python packages">
+    <Tabs>
+      <Tab title="From requirements.txt">
+        ```bash
+        pip install -r requirements.txt
+        ```
+
+        The `requirements.txt` file installs:
+
+        ```text
+        psycopg
+        antlr4-python3-runtime==4.11.1
+        setuptools
+        networkx
+        ```
+      </Tab>
+      <Tab title="From source">
+        ```bash
+        pip install .
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="Prepare the database">
+    Connect to your PostgreSQL instance and load the AGE extension:
+
+    ```sql
+    CREATE EXTENSION age;
+    LOAD 'age';
+    SET search_path = ag_catalog, "$user", public;
+    ```
+  </Step>
+</Steps>
+
+## Connecting
+
+Use `age.connect()` to open a connection and bind it to a graph. The function accepts the same keyword arguments as `psycopg.connect()`.
+
+```python
+import age
+
+ag = age.connect(
+    host='localhost',
+    port=5432,
+    user='postgres',
+    password='agens',
+    dbname='postgres',
+    graph='my_graph'
+)
+```
+
+The `graph` parameter creates the graph automatically if it does not exist.
+
+### Non-superuser connections
+
+If your database account is not a superuser, AGE must be loaded from the PostgreSQL plugins directory. Pass `load_from_plugins=True` so the driver uses `$libdir/plugins/age` instead of the default `LOAD 'age'`:
+
+```python
+ag = age.connect(
+    host='localhost',
+    port=5432,
+    user='dbuser',
+    password='strong_password',
+    dbname='postgres',
+    load_from_plugins=True,
+    graph='my_graph'
+)
+```
+
+<Note>
+You must also grant your non-superuser account access to the graph schemas and their objects. See the [AGE setup guide](https://age.apache.org/age-manual/master/intro/setup.html) for the required `GRANT` statements.
+</Note>
+
+## Running Cypher queries
+
+Use `ag.execCypher()` to run a Cypher statement. Pass a list of column names to define the shape of the result set.
+
+```python
+import age
+
+ag = age.connect(
+    host='localhost',
+    port=5432,
+    user='postgres',
+    password='agens',
+    dbname='postgres',
+    graph='my_graph'
+)
+
+# CREATE does not return rows — commit after a write
+with ag.connection.cursor() as cursor:
+    ag.execCypher("CREATE (n:Person {name: %s, age: %s})", params=('Alice', 30))
+ag.commit()
+
+# MATCH returns rows — iterate the cursor
+cursor = ag.execCypher(
+    "MATCH (n:Person) RETURN n",
+    cols=['n']
+)
+for row in cursor:
+    vertex = row[0]
+    print(vertex.label, vertex.id, vertex.properties)
+
+ag.close()
+```
+
+<Tip>
+Cypher statements that modify data (CREATE, SET, REMOVE, DELETE) must be followed by `ag.commit()` to persist the changes.
+</Tip>
+
+## Agtype objects
+
+The driver unmarshals AGE's agtype wire format into three Python classes defined in `age.models`:
+
+### Vertex
+
+```python
+class Vertex(AGObj):
+    id         # internal AGE vertex ID
+    label      # node label string
+    properties # dict of property key/value pairs
+```
+
+### Edge
+
+```python
+class Edge(AGObj):
+    id         # internal AGE edge ID
+    label      # relationship type string
+    start_id   # ID of the source vertex
+    end_id     # ID of the target vertex
+    properties # dict of property key/value pairs
+```
+
+### Path
+
+A `Path` is an ordered sequence of alternating `Vertex` and `Edge` objects:
+
+```python
+class Path(AGObj):
+    entities   # list of Vertex and Edge objects
+```
+
+You can iterate a `Path` directly or index into it:
+
+```python
+cursor = ag.execCypher(
+    "MATCH p=(a)-[r]->(b) RETURN p",
+    cols=['p']
+)
+for row in cursor:
+    path = row[0]
+    start_vertex = path[0]   # Vertex
+    edge         = path[1]   # Edge
+    end_vertex   = path[2]   # Vertex
+    print(start_vertex.label, edge.label, end_vertex.label)
+```
+
+## NetworkX integration
+
+The driver includes `age_to_networkx()` and `networkx_to_age()` helpers for converting between AGE graphs and [NetworkX](https://networkx.org/) directed graphs.
+
+### Loading an AGE graph into NetworkX
+
+```python
+from age.networkx import age_to_networkx
+import psycopg
+
+connection = psycopg.connect(
+    host='127.0.0.1', dbname='postgres',
+    user='postgres', password='agens'
+)
+
+# Load the entire graph
+G = age_to_networkx(connection, graphName='my_graph')
+
+# Or load with a specific Cypher query
+G = age_to_networkx(
+    connection,
+    graphName='my_graph',
+    query="SELECT * FROM cypher('my_graph', $$ MATCH p=()-[]->() RETURN p $$) AS (p agtype);"
+)
+```
+
+### Writing a NetworkX graph into AGE
+
+```python
+from age.networkx import networkx_to_age
+import networkx as nx
+import psycopg
+
+connection = psycopg.connect(
+    host='127.0.0.1', dbname='postgres',
+    user='postgres', password='agens'
+)
+
+G = nx.DiGraph()
+G.add_node(1)
+G.add_node(2)
+G.add_edge(1, 2)
+
+networkx_to_age(connection, G, graphName='sample_graph')
+```
+
+## Testing
+
+Run the main test suite against a running PostgreSQL + AGE instance:
+
+```bash
+python test_age_py.py \
+  -host "127.0.0.1" \
+  -db "postgres" \
+  -u "postgres" \
+  -pass "agens" \
+  -port 5432 \
+  -gn "test_graph"
+```
+
+Run the agtype unit tests independently:
+
+```bash
+python -m unittest -v test_agtypes.py
+```
+
+Run the NetworkX integration tests:
+
+```bash
+python test_networkx.py \
+  -host "127.0.0.1" \
+  -db "postgres" \
+  -u "postgres" \
+  -pass "agens" \
+  -port 5432
+```

@@ -1,0 +1,650 @@
+---
+title: "Cypher clauses"
+description: "Reference for all supported Cypher clauses in Apache AGE, with syntax patterns and SQL-wrapped examples."
+---
+
+Cypher queries in Apache AGE are executed through the `cypher()` function, which takes a graph name and a Cypher query string. Results are returned as a set of records whose column types must be declared in the `AS` clause.
+
+```sql
+SELECT * FROM cypher('graph_name', $$ <cypher query> $$) AS (col1 agtype, ...);
+```
+
+<Note>
+  Before running queries, load the AGE extension and set the search path: `LOAD 'age'; SET search_path TO ag_catalog;`
+</Note>
+
+---
+
+## MATCH
+
+Find patterns in the graph. `MATCH` scans for nodes and relationships that satisfy the given pattern and binds matched elements to variables.
+
+**Syntax**
+
+```cypher
+MATCH <pattern>
+[WHERE <condition>]
+RETURN <expression>
+```
+
+<Tabs>
+  <Tab title="Basic node match">
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (n:v) RETURN n
+    $$) AS (n agtype);
+    ```
+  </Tab>
+  <Tab title="Relationship match">
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (a:v1)-[:e1]->(b:v1)-[:e1]->(c:v1)
+        RETURN a, b, c
+    $$) AS (a agtype, b agtype, c agtype);
+    ```
+  </Tab>
+  <Tab title="With WHERE">
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (n:v) WHERE n.i > 0
+        RETURN n.i
+    $$) AS (i agtype);
+    ```
+  </Tab>
+  <Tab title="Multiple MATCH clauses">
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (a:v1)
+        WHERE a.id = 'initial'
+        MATCH p=(a)-[]-()-[]-()
+        RETURN p
+    $$) AS (p agtype);
+    ```
+  </Tab>
+  <Tab title="OPTIONAL MATCH">
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (u:opt_match_v)
+        OPTIONAL MATCH (u)-[m]-(l)
+        RETURN u.name AS u, type(m), l.name AS l
+        ORDER BY u, m, l
+    $$) AS (u agtype, m agtype, l agtype);
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+  A `MATCH` clause must always be followed by a `RETURN` or another writing clause. A standalone `MATCH` without `RETURN` is invalid.
+</Tip>
+
+---
+
+## CREATE
+
+Create vertices and edges. Labels are optional for vertices; edge labels are required.
+
+**Syntax**
+
+```cypher
+CREATE (<pattern>)
+[RETURN <expression>]
+```
+
+<Tabs>
+  <Tab title="Create a vertex">
+    ```sql
+    -- Unlabeled vertex
+    SELECT * FROM cypher('cypher_create', $$
+        CREATE ()
+    $$) AS (a agtype);
+
+    -- Labeled vertex with properties
+    SELECT * FROM cypher('cypher_create', $$
+        CREATE (:v {key: 'value'})
+    $$) AS (a agtype);
+    ```
+  </Tab>
+  <Tab title="Create an edge">
+    ```sql
+    SELECT * FROM cypher('cypher_create', $$
+        CREATE (:v {id: 'initial node'})-[:e {id: 'the edge'}]->(:v {id: 'end node'})
+    $$) AS (a agtype);
+    ```
+  </Tab>
+  <Tab title="Create a path">
+    ```sql
+    SELECT * FROM cypher('cypher_create', $$
+        CREATE (:v {id: 'path, initial node'})
+               -[:e {id: 'path, edge one'}]->
+               (:v {id: 'path, middle node'})
+               -[:e {id: 'path, edge two'}]->
+               (:v {id: 'path, last node'})
+    $$) AS (a agtype);
+    ```
+  </Tab>
+  <Tab title="Create from MATCH">
+    ```sql
+    SELECT * FROM cypher('cypher_create', $$
+        MATCH (a:n_var), (b:n_var)
+        WHERE a.name <> b.name
+        CREATE (a)-[:e_var {name: a.name + ' -> ' + b.name}]->(b)
+    $$) AS (a agtype);
+    ```
+  </Tab>
+  <Tab title="Return created element">
+    ```sql
+    SELECT * FROM cypher('cypher_create', $$
+        CREATE ()-[b:e_var]->()`
+        RETURN b, id(b)
+    $$) AS (a agtype, b agtype);
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Edges without labels (`CREATE (:v)-[]->(:v)`) are not supported and will raise an error.
+</Note>
+
+---
+
+## MERGE
+
+Match a pattern or create it if it does not exist. `MERGE` guarantees exactly one match. Use `ON CREATE` and `ON MATCH` sub-clauses to set properties depending on whether the pattern was created or already existed.
+
+**Syntax**
+
+```cypher
+MERGE <pattern>
+[ON CREATE SET <property assignments>]
+[ON MATCH  SET <property assignments>]
+[RETURN <expression>]
+```
+
+<Tabs>
+  <Tab title="Basic MERGE">
+    ```sql
+    -- Creates the node if it does not exist
+    SELECT * FROM cypher('cypher_merge', $$
+        MERGE (n {i: 1}) RETURN n
+    $$) AS (a agtype);
+    ```
+  </Tab>
+  <Tab title="MERGE an edge">
+    ```sql
+    SELECT * FROM cypher('cypher_merge', $$
+        MATCH (n) MERGE (n)-[:e]->(:v)
+    $$) AS (a agtype);
+    ```
+  </Tab>
+  <Tab title="Chained MERGE">
+    ```sql
+    SELECT * FROM cypher('cypher_merge', $$
+        MATCH (person:Person)
+        MERGE (city:City {name: person.bornIn})
+        MERGE (person)-[r:BORN_IN]->(city)
+        RETURN person.name, person.bornIn, city
+    $$) AS (name agtype, bornIn agtype, city agtype);
+    ```
+  </Tab>
+  <Tab title="SET after MERGE">
+    ```sql
+    -- Merge node, then set properties
+    SELECT * FROM cypher('cypher_merge', $$
+        MERGE (n:node {name: 'Jason'})
+        SET n.name = 'Lisa'
+        RETURN n
+    $$) AS (n agtype);
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  `MERGE` on an edge always requires a directed relationship. Undirected merge syntax (`-[r]-`) creates a directed edge internally.
+</Note>
+
+---
+
+## SET
+
+Update properties on matched nodes or edges. Multiple assignments can be comma-separated or chained with additional `SET` clauses.
+
+**Syntax**
+
+```cypher
+SET <variable>.<property> = <expression> [, ...]
+SET <variable> = <map expression>   -- replace all properties
+SET <variable> += <map expression>  -- merge properties
+```
+
+<Tabs>
+  <Tab title="Set a property">
+    ```sql
+    SELECT * FROM cypher('cypher_set', $$
+        MATCH (n) WHERE n.j = 5
+        SET n.i = NULL
+        RETURN n
+    $$) AS (a agtype);
+    ```
+  </Tab>
+  <Tab title="Multiple assignments">
+    ```sql
+    SELECT * FROM cypher('cypher_set', $$
+        MATCH (n {j: 5})
+        SET n.y = 53,
+            n.z = 99,
+            n.arr = [n.y, n.z]
+        RETURN n
+    $$) AS (a agtype);
+    ```
+  </Tab>
+  <Tab title="Replace all properties">
+    ```sql
+    SELECT * FROM cypher('cypher_set_1', $$
+        MATCH (m {name: 'Matt'})
+        SET m = {name: 'Peter Smith', position: 'Entrepreneur'}
+        RETURN m
+    $$) AS (m agtype);
+    ```
+  </Tab>
+  <Tab title="Merge properties (+=)">
+    ```sql
+    SELECT * FROM cypher('cypher_set_1', $$
+        MATCH (p {name: 'Robert'})
+        SET p += {name: 'Rob', role: NULL, age: 47}
+        RETURN p
+    $$) AS (p agtype);
+    ```
+  </Tab>
+  <Tab title="Set edge property">
+    ```sql
+    SELECT * FROM cypher('cypher_set', $$
+        MATCH ()-[n]-(:other_v)
+        SET n.i = 3
+        RETURN n
+    $$) AS (a agtype);
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## DELETE / DETACH DELETE
+
+Remove vertices and edges from the graph. Deleting a vertex that still has edges requires `DETACH DELETE`, which automatically removes all connected edges.
+
+**Syntax**
+
+```cypher
+[DETACH] DELETE <variable> [, ...]
+```
+
+<Tabs>
+  <Tab title="Delete an edge">
+    ```sql
+    SELECT * FROM cypher('cypher_delete', $$
+        MATCH ()-[e]->()
+        DELETE e
+        RETURN e
+    $$) AS (a agtype);
+    ```
+  </Tab>
+  <Tab title="Delete vertices (no edges)">
+    ```sql
+    SELECT * FROM cypher('cypher_delete', $$
+        MATCH (n)
+        DELETE n
+        RETURN n
+    $$) AS (a agtype);
+    ```
+  </Tab>
+  <Tab title="DETACH DELETE">
+    ```sql
+    -- Deletes n1 and its connected edges
+    SELECT * FROM cypher('cypher_delete', $$
+        MATCH (n1)-[e]->(n2)
+        DETACH DELETE n1
+        RETURN e
+    $$) AS (a agtype);
+    ```
+  </Tab>
+  <Tab title="DETACH DELETE multiple">
+    ```sql
+    SELECT * FROM cypher('cypher_delete', $$
+        MATCH (n1)-[e]->(n2)
+        DETACH DELETE n1, n2
+        RETURN e
+    $$) AS (a agtype);
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Attempting `DELETE` on a vertex that still has edges will raise an error. Use `DETACH DELETE` to remove the vertex along with all its relationships.
+</Note>
+
+---
+
+## REMOVE
+
+Remove properties from a node or edge. Multiple properties can be removed in one clause.
+
+**Syntax**
+
+```cypher
+REMOVE <variable>.<property> [, ...]
+```
+
+<Tabs>
+  <Tab title="Remove a property">
+    ```sql
+    SELECT * FROM cypher('cypher_remove', $$
+        MATCH (n:test_1)
+        REMOVE n.i
+    $$) AS (a agtype);
+    ```
+  </Tab>
+  <Tab title="Remove with RETURN">
+    ```sql
+    SELECT * FROM cypher('cypher_remove', $$
+        MATCH (n:test_2)
+        REMOVE n.j
+        RETURN n
+    $$) AS (a agtype);
+    ```
+  </Tab>
+  <Tab title="Remove multiple properties">
+    ```sql
+    SELECT * FROM cypher('cypher_remove', $$
+        MATCH (n)
+        REMOVE n.i, n.j, n.k
+        RETURN n
+    $$) AS (a agtype);
+    ```
+  </Tab>
+  <Tab title="Remove edge property">
+    ```sql
+    SELECT * FROM cypher('cypher_remove', $$
+        MATCH ()-[e:edge_multi_property]-()
+        REMOVE e.i, e.j
+        RETURN e
+    $$) AS (a agtype);
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## RETURN
+
+Return results from a query. Supports aliases, `DISTINCT`, `ORDER BY`, `SKIP`, and `LIMIT`.
+
+**Syntax**
+
+```cypher
+RETURN <expression> [AS <alias>] [, ...]
+       [ORDER BY <expression> [ASC|DESC]]
+       [SKIP <n>]
+       [LIMIT <n>]
+```
+
+<Tabs>
+  <Tab title="Basic return">
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (n:v) RETURN n.i
+    $$) AS (i agtype);
+    ```
+  </Tab>
+  <Tab title="DISTINCT">
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (u)
+        RETURN DISTINCT u.id
+    $$) AS (i agtype) ORDER BY i;
+    ```
+  </Tab>
+  <Tab title="ORDER BY">
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (a)-[r]-(b)
+        RETURN r
+        ORDER BY r DESC
+    $$) AS (r agtype);
+    ```
+  </Tab>
+  <Tab title="SKIP and LIMIT">
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (u)
+        RETURN u
+        SKIP 7 LIMIT 3
+    $$) AS (i agtype);
+    ```
+  </Tab>
+  <Tab title="Alias">
+    ```sql
+    SELECT * FROM cypher('cypher_with', $$
+        MATCH (n)-[e]->(m)
+        WITH n.name AS n1, e AS edge, m.name AS n2
+        RETURN n1, label(edge), n2
+    $$) AS (start_node agtype, edge agtype, end_node agtype);
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## WITH
+
+Pipeline results between query parts. `WITH` controls which variables flow into subsequent clauses and allows filtering, ordering, and aggregation mid-query.
+
+**Syntax**
+
+```cypher
+WITH <expression> [AS <alias>] [, ...]
+     [WHERE <condition>]
+     [ORDER BY <expression>]
+     [LIMIT <n>]
+```
+
+<Tabs>
+  <Tab title="Pass variables">
+    ```sql
+    SELECT * FROM cypher('cypher_with', $$
+        MATCH (n)-[e]->(m)
+        WITH n, e, m
+        RETURN n, e, m
+    $$) AS (N1 agtype, edge agtype, N2 agtype);
+    ```
+  </Tab>
+  <Tab title="WITH WHERE">
+    ```sql
+    SELECT * FROM cypher('cypher_with', $$
+        MATCH (george {name: 'George'})<-[]-(otherPerson)
+        WITH otherPerson, toUpper(otherPerson.name) AS upperCaseName
+        WHERE upperCaseName STARTS WITH 'C'
+        RETURN otherPerson.name
+    $$) AS (name agtype);
+    ```
+  </Tab>
+  <Tab title="WITH ORDER BY / LIMIT">
+    ```sql
+    SELECT * FROM cypher('cypher_with', $$
+        MATCH (n)
+        WITH n
+        ORDER BY n.name DESC LIMIT 3
+        RETURN collect(n.name)
+    $$) AS (names agtype);
+    ```
+  </Tab>
+  <Tab title="Multiple WITH clauses">
+    ```sql
+    SELECT * FROM cypher('cypher_with', $$
+        MATCH (n)-[e]->(m)
+        WITH n, e, m
+        WHERE label(e) = 'KNOWS'
+        WITH n.name AS n1, label(e) AS edge, m.name AS n2
+        WHERE n1 = 'Andres'
+        RETURN n1, edge, n2
+    $$) AS (N1 agtype, edge agtype, N2 agtype);
+    ```
+  </Tab>
+  <Tab title="WITH for aggregation">
+    ```sql
+    SELECT * FROM cypher('cypher_with', $$
+        MATCH (david {name: 'David'})-[]-(otherPerson)-[]->()
+        WITH otherPerson, count(*) AS foaf
+        WHERE foaf > 1
+        RETURN otherPerson.name
+    $$) AS (name agtype);
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Variables not listed in a `WITH` clause are not available in subsequent clauses. Use `WITH *` to carry all current bindings forward.
+</Note>
+
+---
+
+## WHERE
+
+Filter rows based on conditions. `WHERE` can appear after `MATCH`, `WITH`, or `OPTIONAL MATCH`.
+
+**Syntax**
+
+```cypher
+WHERE <condition>
+```
+
+<AccordionGroup>
+  <Accordion title="Comparison operators">
+    ```sql
+    -- Greater than
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (n:v) WHERE n.i > 0
+        RETURN n.i
+    $$) AS (i agtype);
+
+    -- Equality with property constraint
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (n {j: 2})
+        WHERE n.i = 1
+        RETURN n
+    $$) AS (n agtype);
+    ```
+  </Accordion>
+  <Accordion title="Logical operators (AND, OR, NOT)">
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (a), (b)
+        WHERE a.age = 4 AND a.name = 'T' AND b.age = 6
+        RETURN a, b
+    $$) AS (a agtype, b agtype);
+
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (f), (t)
+        WHERE NOT EXISTS((f)-[]->(t))
+        RETURN f.name, t.name
+    $$) AS (f agtype, t agtype);
+    ```
+  </Accordion>
+  <Accordion title="IS NULL / IS NOT NULL">
+    ```sql
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (n) WHERE n.myPath IS NOT NULL
+        RETURN n.myPath
+    $$) AS (path agtype);
+    ```
+  </Accordion>
+  <Accordion title="CONTAINS, STARTS WITH, ENDS WITH">
+    ```sql
+    SELECT * FROM cypher('cypher_with', $$
+        MATCH (george {name: 'George'})<-[]-(otherPerson)
+        WITH otherPerson, toUpper(otherPerson.name) AS upperCaseName
+        WHERE upperCaseName STARTS WITH 'C'
+        RETURN otherPerson.name
+    $$) AS (name agtype);
+    ```
+  </Accordion>
+  <Accordion title="EXISTS predicate">
+    ```sql
+    -- Pattern predicate
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (u) WHERE EXISTS((u)-[]->({id: 'middle'}))
+        RETURN u
+    $$) AS (u agtype);
+
+    -- Property predicate
+    SELECT * FROM cypher('cypher_match', $$
+        MATCH (u) WHERE EXISTS(u.id)
+        RETURN u
+    $$) AS (u agtype);
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## UNWIND
+
+Expand a list into individual rows. Each element of the list becomes a separate row in the result.
+
+**Syntax**
+
+```cypher
+UNWIND <list expression> AS <variable>
+```
+
+<Tabs>
+  <Tab title="Unwind a literal list">
+    ```sql
+    SELECT * FROM cypher('cypher_unwind', $$
+        UNWIND [1, 2, 3] AS i
+        RETURN i
+    $$) AS (i agtype);
+    ```
+  </Tab>
+  <Tab title="Unwind a node property">
+    ```sql
+    SELECT * FROM cypher('cypher_unwind', $$
+        MATCH (n)
+        WITH n.a AS a
+        UNWIND a AS i
+        RETURN *
+    $$) AS (i agtype, j agtype);
+    ```
+  </Tab>
+  <Tab title="Unwind path nodes">
+    ```sql
+    SELECT * FROM cypher('cypher_unwind', $$
+        MATCH p=(n)-[:KNOWS]->(m)
+        UNWIND nodes(p) AS node
+        RETURN node.name
+    $$) AS (i agtype);
+    ```
+  </Tab>
+  <Tab title="Nested UNWIND">
+    ```sql
+    SELECT * FROM cypher('cypher_unwind', $$
+        WITH [[1, 2], [3, 4], 5] AS nested
+        UNWIND nested AS x
+        UNWIND x AS y
+        RETURN y
+    $$) AS (i agtype);
+    ```
+  </Tab>
+  <Tab title="UNWIND to CREATE">
+    ```sql
+    SELECT * FROM cypher('cypher_unwind', $$
+        UNWIND ['foo', 'bar'] AS name
+        CREATE (v:Person {name: name})
+        RETURN v
+    $$) AS (v agtype);
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  `UNWIND NULL AS x` produces zero rows; the variable `x` is never bound.
+</Note>

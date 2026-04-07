@@ -1,0 +1,457 @@
+---
+title: "Scalar functions"
+description: "Cypher scalar functions implemented in ag_catalog for inspecting vertices, edges, paths, and values."
+---
+
+Scalar functions return a single `agtype` value per invocation. They are called inside Cypher queries and are mapped to the corresponding `ag_catalog` SQL functions listed below.
+
+All SQL functions are in the `ag_catalog` schema. Functions marked **IMMUTABLE** can be used in indexes; functions marked **STABLE** are safe inside transactions.
+
+---
+
+## Graph element functions
+
+### id
+
+```sql
+ag_catalog.age_id(agtype) → agtype
+```
+
+Returns the internal ID of a vertex or edge as an `agtype` integer.
+
+| Cypher name | SQL name        | Volatility |
+| ----------- | --------------- | ---------- |
+| `id()`      | `age_id(agtype)`| IMMUTABLE  |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN id(n)
+$$) AS (node_id agtype);
+```
+
+---
+
+### startId
+
+```sql
+ag_catalog.age_start_id(agtype) → agtype
+```
+
+Returns the ID of the start vertex of an edge.
+
+| Cypher name  | SQL name                  | Volatility |
+| ------------ | ------------------------- | ---------- |
+| `startId()`  | `age_start_id(agtype)`    | IMMUTABLE  |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH ()-[r:KNOWS]->()
+    RETURN startId(r)
+$$) AS (start_id agtype);
+```
+
+---
+
+### endId
+
+```sql
+ag_catalog.age_end_id(agtype) → agtype
+```
+
+Returns the ID of the end vertex of an edge.
+
+| Cypher name | SQL name               | Volatility |
+| ----------- | ---------------------- | ---------- |
+| `endId()`   | `age_end_id(agtype)`   | IMMUTABLE  |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH ()-[r:KNOWS]->()
+    RETURN endId(r)
+$$) AS (end_id agtype);
+```
+
+---
+
+### properties
+
+```sql
+ag_catalog.age_properties(agtype) → agtype
+```
+
+Returns all properties of a vertex or edge as an `agtype` object.
+
+| Cypher name    | SQL name                   | Volatility |
+| -------------- | -------------------------- | ---------- |
+| `properties()` | `age_properties(agtype)`   | IMMUTABLE  |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN properties(n)
+$$) AS (props agtype);
+```
+
+---
+
+### startNode
+
+```sql
+ag_catalog.age_startnode(agtype, agtype) → agtype
+```
+
+Returns the start vertex of an edge. Accepts two `agtype` arguments: the edge and the graph context.
+
+| Cypher name   | SQL name                        | Volatility |
+| ------------- | ------------------------------- | ---------- |
+| `startNode()` | `age_startnode(agtype, agtype)` | STABLE     |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (a)-[r:KNOWS]->(b)
+    RETURN startNode(r)
+$$) AS (start_node agtype);
+```
+
+---
+
+### endNode
+
+```sql
+ag_catalog.age_endnode(agtype, agtype) → agtype
+```
+
+Returns the end vertex of an edge. Accepts two `agtype` arguments: the edge and the graph context.
+
+| Cypher name | SQL name                      | Volatility |
+| ----------- | ----------------------------- | ---------- |
+| `endNode()` | `age_endnode(agtype, agtype)` | STABLE     |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (a)-[r:KNOWS]->(b)
+    RETURN endNode(r)
+$$) AS (end_node agtype);
+```
+
+---
+
+### length
+
+```sql
+ag_catalog.age_length(agtype) → agtype
+```
+
+Returns the number of relationships in a path as an `agtype` integer.
+
+| Cypher name | SQL name               | Volatility |
+| ----------- | ---------------------- | ---------- |
+| `length()`  | `age_length(agtype)`   | IMMUTABLE  |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH p = (a)-[:KNOWS*1..3]->(b)
+    RETURN length(p)
+$$) AS (path_length agtype);
+```
+
+---
+
+### type
+
+```sql
+ag_catalog.age_type(agtype) → agtype
+```
+
+Returns the type name of an edge as an `agtype` string.
+
+| Cypher name | SQL name             | Volatility |
+| ----------- | -------------------- | ---------- |
+| `type()`    | `age_type(agtype)`   | STABLE     |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH ()-[r]->()
+    RETURN type(r)
+$$) AS (rel_type agtype);
+```
+
+---
+
+### label
+
+```sql
+ag_catalog.age_label(agtype) → agtype
+```
+
+Returns the label name of a vertex as an `agtype` string.
+
+| Cypher name | SQL name              | Volatility |
+| ----------- | --------------------- | ---------- |
+| `label()`   | `age_label(agtype)`   | STABLE     |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n)
+    RETURN label(n)
+$$) AS (node_label agtype);
+```
+
+---
+
+## List functions
+
+### head
+
+```sql
+ag_catalog.age_head(agtype) → agtype
+```
+
+Returns the first element of a list.
+
+| Cypher name | SQL name             | Volatility |
+| ----------- | -------------------- | ---------- |
+| `head()`    | `age_head(agtype)`   | IMMUTABLE  |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN head([1, 2, 3])
+$$) AS (first_elem agtype);
+```
+
+---
+
+### last
+
+```sql
+ag_catalog.age_last(agtype) → agtype
+```
+
+Returns the last element of a list.
+
+| Cypher name | SQL name             | Volatility |
+| ----------- | -------------------- | ---------- |
+| `last()`    | `age_last(agtype)`   | IMMUTABLE  |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN last([1, 2, 3])
+$$) AS (last_elem agtype);
+```
+
+---
+
+### tail
+
+```sql
+ag_catalog.age_tail(VARIADIC "any") → agtype
+```
+
+Returns all elements of a list except the first.
+
+| Cypher name | SQL name                        | Volatility |
+| ----------- | ------------------------------- | ---------- |
+| `tail()`    | `age_tail(VARIADIC "any")`      | IMMUTABLE  |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN tail([1, 2, 3])
+$$) AS (rest agtype);
+```
+
+---
+
+### size
+
+```sql
+ag_catalog.age_size(VARIADIC "any") → agtype
+```
+
+Returns the number of elements in a list or the number of characters in a string.
+
+| Cypher name | SQL name                     | Volatility |
+| ----------- | ---------------------------- | ---------- |
+| `size()`    | `age_size(VARIADIC "any")`   | IMMUTABLE  |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN size([1, 2, 3]), size('hello')
+$$) AS (list_size agtype, str_size agtype);
+```
+
+---
+
+## Type conversion functions
+
+### toBoolean
+
+```sql
+ag_catalog.age_toboolean(VARIADIC "any") → agtype
+```
+
+Converts a value to an `agtype` boolean. Returns `null` if conversion is not possible.
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN toBoolean('true'), toBoolean(1)
+$$) AS (b1 agtype, b2 agtype);
+```
+
+---
+
+### toBooleanList
+
+```sql
+ag_catalog.age_tobooleanlist(VARIADIC "any") → agtype
+```
+
+Converts a list of values to a list of `agtype` booleans.
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN toBooleanList(['true', 'false', null])
+$$) AS (result agtype);
+```
+
+---
+
+### toFloat
+
+```sql
+ag_catalog.age_tofloat(VARIADIC "any") → agtype
+```
+
+Converts a value to an `agtype` float. Returns `null` if conversion is not possible.
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN toFloat('3.14'), toFloat(42)
+$$) AS (f1 agtype, f2 agtype);
+```
+
+---
+
+### toFloatList
+
+```sql
+ag_catalog.age_tofloatlist(VARIADIC "any") → agtype
+```
+
+Converts a list of values to a list of `agtype` floats.
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN toFloatList([1, '2.5', null])
+$$) AS (result agtype);
+```
+
+---
+
+### toInteger
+
+```sql
+ag_catalog.age_tointeger(VARIADIC "any") → agtype
+```
+
+Converts a value to an `agtype` integer. Returns `null` if conversion is not possible.
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN toInteger('42'), toInteger(3.9)
+$$) AS (i1 agtype, i2 agtype);
+```
+
+---
+
+### toIntegerList
+
+```sql
+ag_catalog.age_tointegerlist(VARIADIC "any") → agtype
+```
+
+Converts a list of values to a list of `agtype` integers.
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN toIntegerList(['1', '2', null])
+$$) AS (result agtype);
+```
+
+---
+
+### toString
+
+```sql
+ag_catalog.age_tostring("any") → agtype
+```
+
+Converts a value to an `agtype` string. Returns `null` if conversion is not possible.
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN toString(42), toString(3.14), toString(true)
+$$) AS (s1 agtype, s2 agtype, s3 agtype);
+```
+
+---
+
+### toStringList
+
+```sql
+ag_catalog.age_tostringlist(VARIADIC "any") → agtype
+```
+
+Converts a list of values to a list of `agtype` strings.
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    RETURN toStringList([1, 2.5, true, null])
+$$) AS (result agtype);
+```
+
+---
+
+## Predicate functions
+
+### exists
+
+```sql
+ag_catalog.age_exists(agtype) → boolean
+```
+
+Returns `true` if the given property or pattern exists, `false` otherwise. Returns a PostgreSQL `boolean`, not `agtype`.
+
+| Cypher name | SQL name              | Volatility |
+| ----------- | --------------------- | ---------- |
+| `exists()`  | `age_exists(agtype)`  | STABLE     |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    WHERE exists(n.email)
+    RETURN n.name
+$$) AS (name agtype);
+```
+
+---
+
+### isEmpty
+
+```sql
+ag_catalog.age_isempty(agtype) → boolean
+```
+
+Returns `true` if a list or map is empty, `false` otherwise. Returns a PostgreSQL `boolean`.
+
+| Cypher name  | SQL name                | Volatility |
+| ------------ | ----------------------- | ---------- |
+| `isEmpty()`  | `age_isempty(agtype)`   | IMMUTABLE  |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    WHERE isEmpty(n.tags)
+    RETURN n.name
+$$) AS (name agtype);
+```

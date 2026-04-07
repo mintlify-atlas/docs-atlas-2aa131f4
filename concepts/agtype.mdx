@@ -1,0 +1,263 @@
+---
+title: "agtype"
+description: "AGE's custom PostgreSQL type for graph data — a superset of JSONB that also represents vertices, edges, and paths."
+---
+
+`agtype` is the custom PostgreSQL type that Apache AGE uses to represent all graph data. It is modeled after `jsonb` (the storage layout is shared via `LIKE = jsonb`) but extends it with graph-specific value kinds: **vertex**, **edge**, and **path**.
+
+Every property on a vertex or edge is stored as `agtype`. Every value returned by the `cypher()` function is `agtype`.
+
+---
+
+## Type definition
+
+Defined in `sql/age_agtype.sql`:
+
+```sql
+CREATE TYPE agtype (
+  INPUT   = ag_catalog.agtype_in,
+  OUTPUT  = ag_catalog.agtype_out,
+  SEND    = ag_catalog.agtype_send,
+  RECEIVE = ag_catalog.agtype_recv,
+  LIKE    = jsonb
+);
+```
+
+`LIKE = jsonb` means `agtype` inherits PostgreSQL's binary JSON storage format, giving it efficient binary representation and the ability to index property values.
+
+---
+
+## Scalar values
+
+`agtype` supports the following scalar types natively:
+
+| agtype scalar | Example literal | Notes |
+|---|---|---|
+| `null` | `NULL` | Absent or unknown value |
+| `boolean` | `true`, `false` | |
+| `integer` | `42` | 64-bit signed integer |
+| `float` | `3.14` | Double precision |
+| `numeric` | `1.5::numeric` | Arbitrary precision; suffix `::numeric` |
+| `string` | `'hello'` | UTF-8 text |
+
+---
+
+## Graph-specific values
+
+In addition to scalars, `agtype` can hold structured graph entities:
+
+- **Vertex** — a node with an `id` (`graphid`), a `label`, and a `properties` map
+- **Edge** — a relationship with an `id`, `label`, `start_id`, `end_id`, and `properties` map
+- **Path** — an alternating sequence of vertices and edges representing a traversal
+
+When you return `n`, `r`, or `p` from a Cypher query, AGE serializes the entity as an `agtype` value. For example, a vertex looks like:
+
+```text
+{"id": 844424930131969, "label": "Person", "properties": {"name": "Alice", "age": 30}}::vertex
+```
+
+And an edge:
+
+```text
+{"id": 1125899906842625, "label": "KNOWS", "start_id": 844424930131969, "end_id": 844424930131970, "properties": {"since": 2021}}::edge
+```
+
+---
+
+## Operators
+
+`agtype` operators are defined in `sql/age_agtype.sql`. All standard arithmetic, comparison, and string operators work between `agtype` values and between `agtype` and native PostgreSQL numeric types.
+
+### Arithmetic operators
+
+| Operator | Function | Description |
+|---|---|---|
+| `+` | `ag_catalog.agtype_add` | Addition |
+| `-` | `ag_catalog.agtype_sub` | Subtraction |
+| `-` (unary) | `ag_catalog.agtype_neg` | Negation |
+| `*` | `ag_catalog.agtype_mul` | Multiplication |
+| `/` | `ag_catalog.agtype_div` | Division |
+| `%` | `ag_catalog.agtype_mod` | Modulo |
+| `^` | `ag_catalog.agtype_pow` | Exponentiation |
+
+Each arithmetic operator is overloaded to accept mixed `agtype` / PostgreSQL-native-type operands — for example, `agtype + integer`, `bigint + agtype`, `agtype + double precision`, and so on.
+
+### Concatenation operator
+
+| Operator | Function | Description |
+|---|---|---|
+| `\|\|` | `ag_catalog.agtype_concat` | Concatenate two `agtype` values (strings or arrays) |
+
+### Comparison operators
+
+`agtype` supports all standard comparison operators (`=`, `<>`, `<`, `>`, `<=`, `>=`) using the same B-tree operator class strategy as PostgreSQL, consistent with how `graphid` comparison works.
+
+### Access operators
+
+Defined in `sql/agtype_access.sql`, these operators let you read fields and elements from `agtype` objects and arrays in SQL context:
+
+| Operator | Right operand | Returns | Description |
+|---|---|---|---|
+| `->` | `text` | `agtype` | Get object field by key |
+| `->>` | `text` | `text` | Get object field as text |
+| `->` | `agtype` | `agtype` | Get object field or array element |
+| `->>` | `agtype` | `text` | Get object field or array element as text |
+| `->` | `int4` | `agtype` | Get array element by index |
+| `->>` | `int4` | `text` | Get array element as text |
+| `#>` | `agtype` | `agtype` | Extract path as agtype |
+| `#>>` | `agtype` | `text` | Extract path as text |
+
+```sql
+-- Access a property using the -> operator in SQL context
+SELECT properties -> 'name'
+FROM social."Person"
+LIMIT 5;
+
+-- Access as text with ->>
+SELECT properties ->> 'name'
+FROM social."Person"
+LIMIT 5;
+```
+
+### Containment and existence operators
+
+Defined in `sql/agtype_exists.sql` and backed by the GIN operator class in `sql/agtype_gin.sql`:
+
+| Operator | Description |
+|---|---|
+| `@>` | Does left contain right? (`agtype @> agtype`) |
+| `<@` | Is left contained by right? (`agtype <@ agtype`) |
+| `?` | Does key/property exist? (`agtype ? text` or `agtype ? agtype`) |
+| `?|` | Does any key in array exist? (`agtype ?| text[]` or `agtype ?| agtype`) |
+| `?&` | Do all keys in array exist? (`agtype ?& text[]` or `agtype ?& agtype`) |
+
+These operators are used by AGE internally when `age.enable_containment = on` (the default) to translate Cypher property filters into index-friendly SQL. You can also use them directly in SQL expressions on label tables:
+
+```sql
+-- Find all Person vertices whose properties contain {name: 'Alice'}
+SELECT id, properties
+FROM social."Person"
+WHERE properties @> '{"name": "Alice"}'::agtype;
+
+-- Check if a key exists
+SELECT properties ? 'email'
+FROM social."Person";
+```
+
+---
+
+## Casting to and from native types
+
+You can cast `agtype` to native PostgreSQL types and vice versa. This lets you integrate graph query results with relational queries:
+
+```sql
+-- Cast an agtype integer to a native int
+SELECT (age_val::text)::int
+FROM cypher('my_graph', $$
+    MATCH (p:Person)
+    RETURN p.age
+$$) AS (age_val agtype);
+```
+
+<Tip>
+  Cast `agtype` to `text` first, then to the target type. Direct casts depend on what the `agtype` value contains at runtime. If the value is not the expected kind, PostgreSQL will raise an error.
+</Tip>
+
+---
+
+## Using agtype in SQL
+
+The `cypher()` function returns `SETOF record`. Every column in the `AS (...)` alias clause must be declared as `agtype`:
+
+```sql
+SELECT * FROM cypher('my_graph', $$
+    MATCH (V)-[R]-(V2)
+    RETURN V, R, V2
+$$) AS (V agtype, R agtype, V2 agtype);
+```
+
+You can also use `agtype` in ordinary SQL expressions. AGE registers a `graph_exists` function that returns `agtype`:
+
+```sql
+-- Returns true::agtype if the graph exists
+SELECT ag_catalog.graph_exists('my_graph');
+```
+
+---
+
+## Common agtype operations
+
+<AccordionGroup>
+  <Accordion title="Access a property value">
+    Use dot notation in Cypher to read a property from a vertex or edge:
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (p:Person)
+        RETURN p.name, p.age
+    $$) AS (name agtype, age agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="Arithmetic on agtype values">
+    Arithmetic operators work directly on `agtype`. The result is always `agtype`:
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (a:label), (b:label)
+        WHERE a.property = 'Node A' AND b.property = 'Node B'
+        CREATE (a)-[e:RELTYPE {property: a.property + '<->' + b.property}]->(b)
+        RETURN e
+    $$) AS (e agtype);
+    ```
+
+    The `+` operator here uses `ag_catalog.agtype_add` and performs string concatenation because both operands are string-typed `agtype` values.
+  </Accordion>
+
+  <Accordion title="Filter with agtype comparisons">
+    Comparison operators let you filter in `WHERE` clauses:
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (p:Person)
+        WHERE p.age > 25
+        RETURN p.name
+    $$) AS (name agtype);
+    ```
+  </Accordion>
+
+  <Accordion title="Return full vertices and edges">
+    Return the whole entity to inspect all its properties:
+
+    ```sql
+    SELECT * FROM cypher('my_graph', $$
+        MATCH (V)-[R]-(V2)
+        RETURN V, R, V2
+    $$) AS (V agtype, R agtype, V2 agtype);
+    ```
+
+    The output columns contain serialized vertex/edge `agtype` objects including their IDs, labels, and property maps.
+  </Accordion>
+
+  <Accordion title="Check graph existence">
+    Use the `graph_exists` utility function, which returns an `agtype` boolean:
+
+    ```sql
+    SELECT ag_catalog.graph_exists('my_graph');
+    -- Returns: true
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Learn more
+
+<CardGroup cols={2}>
+  <Card title="Graph model" icon="diagram-project" href="/concepts/graph-model">
+    How vertices, edges, labels, and properties are stored.
+  </Card>
+  <Card title="Cypher queries" icon="code" href="/concepts/cypher-queries">
+    How to call Cypher from SQL and work with agtype return values.
+  </Card>
+</CardGroup>

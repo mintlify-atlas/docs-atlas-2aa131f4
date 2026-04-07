@@ -1,0 +1,299 @@
+---
+title: "Aggregate functions"
+description: "Cypher aggregate functions implemented in ag_catalog for computing statistics, collecting values, and grouping results."
+---
+
+Aggregate functions operate on a set of values produced by a `MATCH` or `WITH` clause and return a single `agtype` result per group. They appear in `RETURN` or `WITH` clauses, optionally with a `DISTINCT` modifier.
+
+All SQL aggregates are in the `ag_catalog` schema and are declared `PARALLEL SAFE`.
+
+<Note>
+  Columns not wrapped in an aggregate function in the `RETURN` or `WITH` clause implicitly define the grouping key, matching standard Cypher and SQL GROUP BY semantics.
+</Note>
+
+---
+
+## Statistical functions
+
+### stdev
+
+```sql
+CREATE AGGREGATE ag_catalog.age_stdev(agtype)
+```
+
+Returns the sample standard deviation of a set of numeric `agtype` values. Returns `0` (not `null`) when the input set is empty.
+
+| Cypher name | SQL aggregate name    |
+| ----------- | --------------------- |
+| `stdev()`   | `age_stdev(agtype)`   |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN stdev(n.age)
+$$) AS (age_stdev agtype);
+```
+
+**Grouped example** — standard deviation per city:
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN n.city, stdev(n.age)
+$$) AS (city agtype, age_stdev agtype);
+```
+
+---
+
+### stdevp
+
+```sql
+CREATE AGGREGATE ag_catalog.age_stdevp(agtype)
+```
+
+Returns the population standard deviation of a set of numeric `agtype` values. Use `stdevp` when the data represents the entire population rather than a sample. Returns `0` when the input set is empty.
+
+| Cypher name | SQL aggregate name     |
+| ----------- | ---------------------- |
+| `stdevp()`  | `age_stdevp(agtype)`   |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN stdevp(n.age)
+$$) AS (age_stdevp agtype);
+```
+
+---
+
+### avg
+
+```sql
+CREATE AGGREGATE ag_catalog.age_avg(agtype)
+```
+
+Returns the arithmetic mean of a set of numeric `agtype` values. `null` values are ignored.
+
+| Cypher name | SQL aggregate name  |
+| ----------- | ------------------- |
+| `avg()`     | `age_avg(agtype)`   |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN avg(n.age)
+$$) AS (avg_age agtype);
+```
+
+---
+
+### sum
+
+```sql
+CREATE AGGREGATE ag_catalog.age_sum(agtype)
+```
+
+Returns the sum of a set of numeric `agtype` values. `null` values are ignored.
+
+| Cypher name | SQL aggregate name  |
+| ----------- | ------------------- |
+| `sum()`     | `age_sum(agtype)`   |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Product)
+    RETURN sum(n.price)
+$$) AS (total_price agtype);
+```
+
+---
+
+## Count
+
+### count
+
+```sql
+-- count(expression): counts non-null values
+-- count(*): counts all rows in the group
+```
+
+Counts rows or non-null values in a group. `count(*)` counts every matched row; `count(expression)` counts only rows where the expression is not `null`.
+
+<Note>
+  `count` is a built-in Cypher aggregate resolved internally by AGE. There is no separate `ag_catalog` aggregate for it.
+</Note>
+
+```sql
+-- Count all matched nodes
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN count(*)
+$$) AS (total agtype);
+
+-- Count only nodes that have an email property
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN count(n.email)
+$$) AS (with_email agtype);
+
+-- Count per label using a grouping key
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN n.city, count(n)
+$$) AS (city agtype, person_count agtype);
+```
+
+---
+
+## Extremes
+
+### max
+
+```sql
+CREATE AGGREGATE ag_catalog.age_max(VARIADIC "any")
+```
+
+Returns the maximum value from a set of comparable `agtype` values. `null` values are ignored.
+
+| Cypher name | SQL aggregate name                |
+| ----------- | --------------------------------- |
+| `max()`     | `age_max(VARIADIC "any")`         |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN max(n.age)
+$$) AS (max_age agtype);
+```
+
+---
+
+### min
+
+```sql
+CREATE AGGREGATE ag_catalog.age_min(VARIADIC "any")
+```
+
+Returns the minimum value from a set of comparable `agtype` values. `null` values are ignored.
+
+| Cypher name | SQL aggregate name                |
+| ----------- | --------------------------------- |
+| `min()`     | `age_min(VARIADIC "any")`         |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN min(n.age)
+$$) AS (min_age agtype);
+```
+
+---
+
+## Collection
+
+### collect
+
+```sql
+CREATE AGGREGATE ag_catalog.age_collect(VARIADIC "any")
+```
+
+Collects all non-null values in the group into an `agtype` list. Useful for grouping related values without losing individual records.
+
+| Cypher name | SQL aggregate name               |
+| ----------- | -------------------------------- |
+| `collect()` | `age_collect(VARIADIC "any")`    |
+
+```sql
+-- Collect all names per city
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN n.city, collect(n.name)
+$$) AS (city agtype, names agtype);
+```
+
+**With DISTINCT** — collect unique values only:
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)-[:LIVES_IN]->(c:City)
+    RETURN collect(DISTINCT c.name)
+$$) AS (cities agtype);
+```
+
+---
+
+## Percentile functions
+
+### percentileCont
+
+```sql
+CREATE AGGREGATE ag_catalog.age_percentilecont(agtype, agtype)
+```
+
+Returns a continuous interpolated percentile value. The first argument is the expression to aggregate; the second is the percentile between `0.0` and `1.0`.
+
+| Cypher name       | SQL aggregate name                         |
+| ----------------- | ------------------------------------------ |
+| `percentileCont()`| `age_percentilecont(agtype, agtype)`        |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN percentileCont(n.age, 0.5)
+$$) AS (median_age agtype);
+```
+
+---
+
+### percentileDisc
+
+```sql
+CREATE AGGREGATE ag_catalog.age_percentiledisc(agtype, agtype)
+```
+
+Returns a discrete (nearest-rank) percentile value. The result is always an actual value from the input set, unlike `percentileCont` which may interpolate.
+
+| Cypher name        | SQL aggregate name                          |
+| ------------------ | ------------------------------------------- |
+| `percentileDisc()` | `age_percentiledisc(agtype, agtype)`         |
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN percentileDisc(n.age, 0.9)
+$$) AS (p90_age agtype);
+```
+
+---
+
+## Using aggregates with WITH
+
+Intermediate aggregation using `WITH` lets you filter or further process grouped results:
+
+```sql
+SELECT * FROM ag_catalog.cypher('my_graph', $$
+    MATCH (n:Person)-[:KNOWS]->(friend:Person)
+    WITH n, count(friend) AS friend_count
+    WHERE friend_count > 5
+    RETURN n.name, friend_count
+$$) AS (name agtype, friend_count agtype);
+```
+
+<AccordionGroup>
+  <Accordion title="Aggregate function reference">
+
+    | Cypher function    | SQL aggregate                             | Returns                      |
+    | ------------------ | ----------------------------------------- | ---------------------------- |
+    | `stdev(x)`         | `age_stdev(agtype)`                       | Sample standard deviation    |
+    | `stdevp(x)`        | `age_stdevp(agtype)`                      | Population standard deviation|
+    | `avg(x)`           | `age_avg(agtype)`                         | Arithmetic mean              |
+    | `sum(x)`           | `age_sum(agtype)`                         | Sum of values                |
+    | `count(x)`/`count(*)`| Built-in                               | Count of rows or non-nulls   |
+    | `max(x)`           | `age_max(VARIADIC "any")`                 | Maximum value                |
+    | `min(x)`           | `age_min(VARIADIC "any")`                 | Minimum value                |
+    | `collect(x)`       | `age_collect(VARIADIC "any")`             | List of values               |
+    | `percentileCont(x, p)` | `age_percentilecont(agtype, agtype)` | Interpolated percentile      |
+    | `percentileDisc(x, p)` | `age_percentiledisc(agtype, agtype)` | Discrete percentile          |
+
+  </Accordion>
+</AccordionGroup>

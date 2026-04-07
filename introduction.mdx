@@ -1,0 +1,65 @@
+---
+title: "Introduction"
+description: "Apache AGE is a PostgreSQL extension that adds graph database capabilities, enabling openCypher queries alongside standard SQL in a single storage engine."
+---
+
+## What is Apache AGE?
+
+Apache AGE (A Graph Extension) is an extension for PostgreSQL that enables you to use a graph database on top of your existing relational database. It is inspired by Bitnine's AgensGraph, a multi-model database fork of PostgreSQL.
+
+The core principle of AGE is to provide a single storage engine that handles both relational and graph data models. You can use standard ANSI SQL alongside openCypher — one of the most widely used graph query languages — without maintaining separate database systems.
+
+As a PostgreSQL extension, AGE inherits all PostgreSQL functionality while adding a full property graph model. Organizations already running PostgreSQL can adopt graph capabilities without migrating data or changing infrastructure.
+
+<Note>
+  Apache AGE supports PostgreSQL versions 11, 12, 13, 14, 15, 16, 17, and 18. The current release is v1.7.0.
+</Note>
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="openCypher support" icon="code">
+    Write graph queries using openCypher, the industry-standard declarative graph query language. Use `MATCH`, `CREATE`, `MERGE`, and other Cypher clauses directly in PostgreSQL.
+  </Card>
+  <Card title="Hybrid SQL + Cypher queries" icon="database">
+    Combine SQL and Cypher in a single query. Call `cypher()` as a set-returning function from within any SQL statement, enabling joins between relational tables and graph data.
+  </Card>
+  <Card title="Multiple named graphs" icon="diagram-project">
+    Create and query multiple independent graphs within the same database. Each graph is isolated in its own schema under `ag_catalog`.
+  </Card>
+  <Card title="Property indexes" icon="bolt">
+    Create indexes on both vertex and edge properties to accelerate graph traversal and pattern matching on large datasets.
+  </Card>
+  <Card title="agtype data type" icon="brackets-curly">
+    A flexible, JSON-compatible PostgreSQL type that stores graph property values. Supports strings, numbers, booleans, lists, and maps, including heterogeneous collections.
+  </Card>
+  <Card title="Language drivers" icon="plug">
+    Built-in drivers for Go, Java, Node.js, and Python. Community-maintained drivers for Rust and .NET are also available.
+  </Card>
+</CardGroup>
+
+## When to use AGE
+
+AGE is well-suited for workloads where relationships between entities are first-class data, including:
+
+- **Fraud detection** — traverse networks of accounts, transactions, and devices to identify suspicious patterns
+- **Recommendation engines** — model user-item interactions as a graph and query multi-hop relationships
+- **Knowledge graphs** — represent and query complex domain knowledge with rich entity relationships
+- **Identity and relationship management** — track how people, organizations, and systems are connected
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Run Apache AGE with Docker and execute your first graph queries in minutes.
+  </Card>
+  <Card title="Installation" icon="wrench" href="/installation">
+    Install AGE from source or via Docker on Linux or macOS.
+  </Card>
+  <Card title="Graph model" icon="circle-nodes" href="/concepts/graph-model">
+    Learn about vertices, edges, labels, and properties in AGE.
+  </Card>
+  <Card title="Language drivers" icon="plug" href="/drivers/overview">
+    Connect to AGE from Go, Java, Node.js, or Python.
+  </Card>
+</CardGroup>

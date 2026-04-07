@@ -1,0 +1,161 @@
+---
+title: "Upgrading AGE"
+description: "Upgrade Apache AGE using PostgreSQL's ALTER EXTENSION mechanism, with step-by-step instructions and version-specific change notes."
+---
+
+## Overview
+
+AGE uses PostgreSQL's standard extension upgrade mechanism. An upgrade script — a SQL file named `age--<from>--<to>.sql` — is applied by running `ALTER EXTENSION age UPDATE TO '<version>'`. This lets you upgrade in place without dropping and recreating the extension, preserving all your graph data.
+
+<Warning>
+Always test upgrades in a non-production environment before applying them to production. Some upgrade scripts may take a significant amount of time to complete on large graphs. The 1.6.0 → 1.7.0 upgrade creates indexes on all existing label tables, which can be slow for large datasets.
+</Warning>
+
+---
+
+## Upgrade steps
+
+<Steps>
+  <Step title="Back up your database">
+    Before upgrading, take a full database backup using `pg_dump`:
+
+    ```bash
+    pg_dump -Fc -d mydb -f mydb_backup.dump
+    ```
+
+    For a cluster-level backup:
+
+    ```bash
+    pg_dumpall -f cluster_backup.sql
+    ```
+  </Step>
+
+  <Step title="Install the new AGE version">
+    Build and install the new AGE release into your PostgreSQL installation:
+
+    ```bash
+    git checkout v1.7.0
+    make
+    make install
+    ```
+
+    This places the new `age.so`, `age--1.7.0.sql`, `age--1.6.0--1.7.0.sql`, and updated `age.control` into the correct PostgreSQL directories. The running PostgreSQL instance does not need to be stopped for `make install`.
+
+    <Note>
+    The upgrade SQL script (`age--1.6.0--1.7.0.sql`) must be present in the PostgreSQL extension directory (`$(pg_config --sharedir)/extension/`) before you run `ALTER EXTENSION`. `make install` places it there automatically.
+    </Note>
+  </Step>
+
+  <Step title="Run ALTER EXTENSION UPDATE">
+    Connect to each database where AGE is installed and run:
+
+    ```sql
+    ALTER EXTENSION age UPDATE TO '1.7.0';
+    ```
+
+    PostgreSQL locates the appropriate upgrade script (`age--1.6.0--1.7.0.sql`), executes it, and updates the extension metadata. The command must be run by a superuser.
+
+    <Note>
+    `ALTER EXTENSION age UPDATE` without specifying a version upgrades to the `default_version` declared in `age.control` — currently `1.7.0`. Specifying the version explicitly is recommended to avoid unintended upgrades.
+    </Note>
+  </Step>
+
+  <Step title="Verify the upgrade">
+    Confirm the installed version:
+
+    ```sql
+    SELECT extversion FROM pg_extension WHERE extname = 'age';
+    ```
+
+    Expected output after upgrading to 1.7.0:
+
+    ```
+     extversion
+    ------------
+     1.7.0
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Version history
+
+### 1.6.0 → 1.7.0
+
+The upgrade script (`age--1.6.0--1.7.0.sql`) makes the following changes to an existing AGE installation:
+
+**New functions for edge uniqueness checks**
+
+Three new `PARALLEL SAFE` C functions are added to `ag_catalog`:
+
+| Function | Arguments | Description |
+|---|---|---|
+| `_ag_enforce_edge_uniqueness2` | `graphid, graphid` | Checks uniqueness across 2 edges |
+| `_ag_enforce_edge_uniqueness3` | `graphid, graphid, graphid` | Checks uniqueness across 3 edges |
+| `_ag_enforce_edge_uniqueness4` | `graphid, graphid, graphid, graphid` | Checks uniqueness across 4 edges |
+
+These functions are marked `STABLE` and `PARALLEL SAFE`, enabling better query plan parallelism for path-matching queries.
+
+**Index creation on existing label tables**
+
+The upgrade script creates missing indexes on all existing label tables in every graph:
+
+- **Vertex labels**: Adds a `PRIMARY KEY` on the `id` column. If a compatible unique btree index already exists on `id`, it is promoted to a primary key to avoid rebuilding the index.
+- **Edge labels**: Adds btree indexes on `start_id` and `end_id` columns. The indexes are named `<table>_start_id_idx` and `<table>_end_id_idx`.
+
+<Warning>
+Index creation runs inside the upgrade script and locks each label table briefly. On graphs with large label tables, this may take a significant amount of time. Plan the upgrade during a maintenance window. The `RELEASE` file notes: "the upgrade script may take a while to complete for large graphs, due to creation of indexes for existing labels."
+</Warning>
+
+**Other notable changes in 1.7.0**
+
+- PostgreSQL 18 support
+- Row-level security (RLS) support with fixed permission checks
+- CSV loading now uses PostgreSQL's native `COPY` mechanism instead of `libcsv`
+- 32-bit platform support for the `graphid` type
+- Fixed: ambiguous column reference in some queries
+- Fixed: empty list handling in `IN` expressions
+- Fixed: `ORDER BY` alias resolution with `AS` in Cypher queries
+- Fixed: segmentation fault when calling the `coalesce` function
+- Fixed: creating more than 41 vertex labels causing a crash in `drop_graph`
+- Fixed: memory and file descriptor leaks
+- Fixed: `CALL`/`YIELD` for user-defined and qualified functions
+
+---
+
+## PostgreSQL version compatibility
+
+<Warning>
+Upgrade scripts only work within the same PostgreSQL major version. The comment at the top of `age--1.6.0--1.7.0.sql` states: "This will only work within a major version of PostgreSQL, not across major versions."
+</Warning>
+
+If you need to upgrade both AGE and PostgreSQL at the same time (e.g., moving from PostgreSQL 16 to PostgreSQL 18), the next AGE version (accessible via `age--1.7.0--y.y.y.sql` template) provides helper functions for `pg_upgrade` support:
+
+| Function | Description |
+|---|---|
+| `age_prepare_pg_upgrade()` | Converts `ag_graph.namespace` from `regnamespace` to `oid` type, which survives `pg_upgrade`. Creates a backup table. Run before `pg_upgrade`. |
+| `age_finish_pg_upgrade()` | Remaps stale OIDs in AGE catalog tables after `pg_upgrade` completes and restores the original schema. Run after `pg_upgrade`. |
+| `age_revert_pg_upgrade_changes()` | Reverts the schema changes made by `age_prepare_pg_upgrade()` if you need to cancel the upgrade. |
+| `age_pg_upgrade_status()` | Returns the current `pg_upgrade` readiness state of the AGE installation. |
+
+Typical `pg_upgrade` workflow with AGE:
+
+```sql
+-- Step 1: On the old PostgreSQL version, before pg_upgrade
+SELECT age_prepare_pg_upgrade();
+
+-- Step 2: Run pg_upgrade (outside PostgreSQL)
+-- pg_upgrade -b /old/bin -B /new/bin -d /old/data -D /new/data
+
+-- Step 3: On the new PostgreSQL version, after pg_upgrade
+SELECT age_finish_pg_upgrade();
+```
+
+---
+
+## Upgrade path for future versions
+
+The file `age--1.7.0--y.y.y.sql` is a template that developers use to accumulate SQL changes for the next release. The placeholder `y.y.y` is stamped with the actual next version number at release time. If you are building from source at HEAD, `make installcheck` uses this template to test the upgrade path automatically.
+
+You do not need to interact with this file directly unless you are contributing to AGE development.

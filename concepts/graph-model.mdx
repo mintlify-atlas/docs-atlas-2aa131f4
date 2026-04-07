@@ -1,0 +1,224 @@
+---
+title: "Graph model"
+description: "How Apache AGE stores graph data in PostgreSQL using a property graph model with vertices, edges, labels, and properties."
+---
+
+Apache AGE stores graph data inside PostgreSQL using a **property graph model**. Every graph lives in its own PostgreSQL schema. You interact with it using openCypher queries via the `cypher()` function — while AGE handles all storage transparently in catalog tables and per-label relations.
+
+## Core concepts
+
+### Vertices (nodes)
+
+A vertex is a discrete entity in the graph. Every vertex has:
+
+- A unique **identifier** of type `graphid` (an 8-byte opaque value)
+- One or more **labels** — categorical tags such as `Person` or `Product`
+- A set of **properties** stored as `agtype` key-value pairs
+
+```sql
+-- Create a vertex with a label and properties
+SELECT * FROM cypher('my_graph', $$
+    CREATE (:Person {name: 'Alice', age: 30})
+    RETURN 'created'
+$$) AS (result agtype);
+```
+
+### Edges
+
+An edge is a directed connection between two vertices. Every edge has:
+
+- A unique `graphid` identifier
+- A **label** (also called its type), such as `KNOWS` or `RELTYPE`
+- A `start_id` (`graphid` of the source vertex)
+- An `end_id` (`graphid` of the destination vertex)
+- A set of **properties** stored as `agtype`
+
+```sql
+-- Create an edge between two matched vertices
+SELECT * FROM cypher('my_graph', $$
+    MATCH (a:label), (b:label)
+    WHERE a.property = 'Node A' AND b.property = 'Node B'
+    CREATE (a)-[e:RELTYPE {property: a.property + '<->' + b.property}]->(b)
+    RETURN e
+$$) AS (e agtype);
+```
+
+<Note>
+  Edges in AGE are always directed. You can match them in either direction in Cypher using `(a)-[r]-(b)`, but the underlying storage always records a `start_id` and `end_id`.
+</Note>
+
+### Labels
+
+A label is a named category applied to vertices or edges. Labels are stored in the `ag_label` catalog table and act as PostgreSQL relations (tables) under the graph's schema.
+
+- A vertex label has `kind = 'v'`
+- An edge label has `kind = 'e'`
+
+You can create labels explicitly or let AGE create them implicitly when you run a `CREATE` clause.
+
+```sql
+-- Explicitly create vertex and edge labels
+SELECT ag_catalog.create_vlabel('my_graph', 'Person');
+SELECT ag_catalog.create_elabel('my_graph', 'KNOWS');
+```
+
+### Properties
+
+Properties are key-value pairs attached to vertices and edges. Values are stored as [`agtype`](/concepts/agtype) — AGE's extended JSON-like type. Scalar property values include `null`, booleans, integers, floats, numerics, and strings.
+
+```sql
+-- Access a vertex property in a MATCH query
+SELECT * FROM cypher('my_graph', $$
+    MATCH (v:Person)
+    WHERE v.age > 25
+    RETURN v.name, v.age
+$$) AS (name agtype, age agtype);
+```
+
+### Graphs
+
+A graph is a named container for a set of vertices and edges. Creating a graph creates a new PostgreSQL schema and registers it in the `ag_graph` catalog table.
+
+```sql
+-- Create a named graph
+SELECT ag_catalog.create_graph('my_graph');
+
+-- Drop a graph and all its data
+SELECT ag_catalog.drop_graph('my_graph', true);
+```
+
+---
+
+## Catalog tables
+
+AGE maintains two catalog tables in the `ag_catalog` schema that track all graphs and labels.
+
+### `ag_graph`
+
+Defined in `sql/age_main.sql`:
+
+```sql
+CREATE TABLE ag_graph (
+    graphid   oid          NOT NULL,
+    name      name         NOT NULL,
+    namespace regnamespace NOT NULL
+);
+```
+
+| Column | Type | Description |
+|---|---|---|
+| `graphid` | `oid` | Unique object identifier for this graph |
+| `name` | `name` | Human-readable graph name passed to `create_graph` |
+| `namespace` | `regnamespace` | PostgreSQL schema that holds this graph's label tables |
+
+### `ag_label`
+
+Defined in `sql/age_main.sql`:
+
+```sql
+CREATE TABLE ag_label (
+    name      name        NOT NULL,
+    graph     oid         NOT NULL,
+    id        label_id,
+    kind      label_kind,
+    relation  regclass    NOT NULL,
+    seq_name  name        NOT NULL,
+    CONSTRAINT fk_graph_oid
+        FOREIGN KEY(graph)
+            REFERENCES ag_graph(graphid)
+);
+```
+
+| Column | Type | Description |
+|---|---|---|
+| `name` | `name` | Label name (e.g. `Person`, `KNOWS`) |
+| `graph` | `oid` | Foreign key to `ag_graph.graphid` |
+| `id` | `label_id` | Integer between 1 and 65535; part of the `graphid` encoding |
+| `kind` | `label_kind` | `'v'` for vertex labels, `'e'` for edge labels |
+| `relation` | `regclass` | The underlying PostgreSQL table that stores the label's rows |
+| `seq_name` | `name` | Name of the sequence used to generate new entry IDs |
+
+<Note>
+  `label_id` is a domain constrained to `int NOT NULL CHECK (VALUE > 0 AND VALUE <= 65535)`. `label_kind` is a domain constrained to `"char" NOT NULL CHECK (VALUE = 'v' OR VALUE = 'e')`.
+</Note>
+
+### `graphid` type
+
+Every vertex and edge is identified by a `graphid` — a custom 8-byte PostgreSQL type defined in `sql/age_main.sql`:
+
+```sql
+CREATE TYPE graphid (
+  INPUT          = ag_catalog.graphid_in,
+  OUTPUT         = ag_catalog.graphid_out,
+  SEND           = ag_catalog.graphid_send,
+  RECEIVE        = ag_catalog.graphid_recv,
+  INTERNALLENGTH = 8,
+  PASSEDBYVALUE,
+  ALIGNMENT      = float8,
+  STORAGE        = plain
+);
+```
+
+A `graphid` encodes both the label ID and the per-label entry ID, so AGE can identify the owning label of any vertex or edge from its identifier alone. You can construct and decompose them with:
+
+```sql
+-- Build a graphid from label_id and entry_id
+SELECT ag_catalog._graphid(label_id, entry_id);
+
+-- Extract the label ID from a graphid
+SELECT ag_catalog._extract_label_id(some_graphid);
+
+-- Look up the label name for a graphid in a given graph
+SELECT ag_catalog._label_name(graph_oid, some_graphid);
+```
+
+---
+
+## Putting it together
+
+The example below shows the full lifecycle: create a graph, write vertices and an edge, then match the pattern.
+
+```sql
+-- 1. Load AGE and set the search path
+LOAD 'age';
+SET search_path = ag_catalog, "$user", public;
+
+-- 2. Create a graph
+SELECT create_graph('graph_name');
+
+-- 3. Create two vertices
+SELECT * FROM cypher('graph_name', $$
+    CREATE (:label {property: 'Node A'})
+$$) AS (v agtype);
+
+SELECT * FROM cypher('graph_name', $$
+    CREATE (:label {property: 'Node B'})
+$$) AS (v agtype);
+
+-- 4. Create an edge between them
+SELECT * FROM cypher('graph_name', $$
+    MATCH (a:label), (b:label)
+    WHERE a.property = 'Node A' AND b.property = 'Node B'
+    CREATE (a)-[e:RELTYPE {property: a.property + '<->' + b.property}]->(b)
+    RETURN e
+$$) AS (e agtype);
+
+-- 5. Query the graph
+SELECT * FROM cypher('graph_name', $$
+    MATCH (V)-[R]-(V2)
+    RETURN V, R, V2
+$$) AS (V agtype, R agtype, V2 agtype);
+```
+
+---
+
+## Learn more
+
+<CardGroup cols={2}>
+  <Card title="agtype" icon="brackets-curly" href="/concepts/agtype">
+    The data type used to store all vertex and edge properties.
+  </Card>
+  <Card title="Cypher queries" icon="code" href="/concepts/cypher-queries">
+    How to call Cypher from SQL using the `cypher()` function.
+  </Card>
+</CardGroup>

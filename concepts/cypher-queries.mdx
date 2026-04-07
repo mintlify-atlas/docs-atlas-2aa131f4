@@ -1,0 +1,264 @@
+---
+title: "Cypher queries"
+description: "How to run openCypher queries from SQL using AGE's cypher() function, including parameterized queries, multi-column returns, and advanced patterns."
+---
+
+Apache AGE exposes openCypher queries to PostgreSQL through the `cypher()` set-returning function. Every Cypher statement — `MATCH`, `CREATE`, `MERGE`, `SET`, `DELETE`, and so on — is executed by passing it as a string to `cypher()` inside a standard SQL `SELECT`.
+
+---
+
+## The `cypher()` function
+
+Defined in `sql/age_query.sql`:
+
+```sql
+CREATE FUNCTION ag_catalog.cypher(
+    graph_name   name    = NULL,
+    query_string cstring = NULL,
+    params       agtype  = NULL
+)
+RETURNS SETOF record
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `graph_name` | `name` | Name of the graph to query, as passed to `create_graph` |
+| `query_string` | `cstring` | The Cypher query string |
+| `params` | `agtype` | Optional `agtype` map of query parameters |
+
+The function returns `SETOF record` — an untyped set of rows. You must always provide a column alias list using `AS (col agtype, ...)` so PostgreSQL knows the shape of each row.
+
+---
+
+## Basic usage
+
+### Session setup
+
+Before running any `cypher()` call you must load AGE and set the search path for the current session:
+
+```sql
+LOAD 'age';
+SET search_path = ag_catalog, "$user", public;
+```
+
+### Dollar-quoting for Cypher strings
+
+Pass Cypher queries using PostgreSQL dollar-quoting (`$$...$$`) to avoid escaping conflicts with single quotes inside the Cypher string:
+
+```sql
+SELECT * FROM cypher('my_graph', $$
+    MATCH (n:Person)
+    RETURN n
+$$) AS (n agtype);
+```
+
+<Note>
+  Dollar-quoting (`$$`) is standard PostgreSQL syntax. The Cypher string is treated as a plain `cstring` at runtime — AGE parses it as Cypher, not as SQL.
+</Note>
+
+---
+
+## Column alias requirement
+
+Because `cypher()` returns `SETOF record`, PostgreSQL requires you to declare the output columns with their types. Every column must be declared as `agtype`:
+
+```sql
+-- Single return value
+SELECT * FROM cypher('graph_name', $$
+    CREATE (:label {property: 'Node A'})
+$$) AS (v agtype);
+
+-- Multiple return values
+SELECT * FROM cypher('graph_name', $$
+    MATCH (V)-[R]-(V2)
+    RETURN V, R, V2
+$$) AS (V agtype, R agtype, V2 agtype);
+```
+
+<Warning>
+  If you omit the `AS (...)` clause or use wrong column names, PostgreSQL will raise an error because it cannot determine the record type from an untyped `SETOF record` function.
+</Warning>
+
+---
+
+## Creating vertices and edges
+
+```sql
+-- Create a vertex
+SELECT * FROM cypher('graph_name', $$
+    CREATE (:label {property: 'Node A'})
+$$) AS (v agtype);
+
+-- Create another vertex
+SELECT * FROM cypher('graph_name', $$
+    CREATE (:label {property: 'Node B'})
+$$) AS (v agtype);
+
+-- Create an edge between the two vertices, computing a property value
+SELECT * FROM cypher('graph_name', $$
+    MATCH (a:label), (b:label)
+    WHERE a.property = 'Node A' AND b.property = 'Node B'
+    CREATE (a)-[e:RELTYPE {property: a.property + '<->' + b.property}]->(b)
+    RETURN e
+$$) AS (e agtype);
+```
+
+---
+
+## Matching and returning data
+
+```sql
+-- Return all vertices connected by any relationship
+SELECT * FROM cypher('graph_name', $$
+    MATCH (V)-[R]-(V2)
+    RETURN V, R, V2
+$$) AS (V agtype, R agtype, V2 agtype);
+```
+
+---
+
+## Parameterized queries
+
+Pass dynamic values as an `agtype` map using the third argument to `cypher()`. Inside the Cypher string, reference parameters with `$param_name`:
+
+```sql
+SELECT * FROM cypher('my_graph', $$
+    MATCH (p:Person)
+    WHERE p.name = $name
+    RETURN p
+$$, '{"name": "Alice"}'::agtype) AS (p agtype);
+```
+
+<Tip>
+  Parameterized queries are the safest way to inject runtime values into Cypher. They avoid string-building and Cypher injection risks.
+</Tip>
+
+---
+
+## Multi-column returns
+
+When your Cypher `RETURN` clause produces multiple columns, list each one in the `AS` clause:
+
+```sql
+SELECT person1, person2, since
+FROM cypher('my_graph', $$
+    MATCH (a:Person)-[r:KNOWS]->(b:Person)
+    RETURN a.name, b.name, r.since
+$$) AS (person1 agtype, person2 agtype, since agtype);
+```
+
+The number and order of columns in `AS (...)` must match the number and order of expressions in the Cypher `RETURN` clause.
+
+---
+
+## Advanced patterns
+
+### Using `cypher()` in a CTE
+
+```sql
+WITH graph_rows AS (
+    SELECT name, age
+    FROM cypher('my_graph', $$
+        MATCH (p:Person)
+        RETURN p.name, p.age
+    $$) AS (name agtype, age agtype)
+)
+SELECT * FROM graph_rows
+WHERE age::text::int > 25;
+```
+
+### Using `cypher()` in a `WHERE` clause
+
+You can combine Cypher results with relational data in a subquery:
+
+```sql
+SELECT u.email
+FROM users u
+WHERE u.name IN (
+    SELECT name::text
+    FROM cypher('my_graph', $$
+        MATCH (p:Person)
+        RETURN p.name
+    $$) AS (name agtype)
+);
+```
+
+### Joining graph results with a relational table
+
+```sql
+SELECT u.email, age_val
+FROM cypher('my_graph', $$
+    MATCH (p:Person)
+    RETURN p.name, p.age
+$$) AS (gname agtype, age_val agtype)
+JOIN users u ON u.name = gname::text;
+```
+
+---
+
+## Write clauses
+
+For write-only Cypher statements (`CREATE`, `SET`, `DELETE`, `MERGE`) that return no columns, you still must supply a dummy `AS` clause with at least one `agtype` column, because `cypher()` always returns `SETOF record`:
+
+```sql
+SELECT * FROM cypher('my_graph', $$
+    MATCH (p:Person {name: 'Alice'})
+    SET p.age = 31
+$$) AS (result agtype);
+```
+
+<Note>
+  Internal write clause handlers are registered as separate C functions (`_cypher_create_clause`, `_cypher_set_clause`, `_cypher_delete_clause`, `_cypher_merge_clause`) but you never call them directly. The `cypher()` function dispatches to them automatically.
+</Note>
+
+---
+
+## Listing reserved keywords
+
+Use `get_cypher_keywords()` to see all reserved and non-reserved words recognized by the Cypher parser:
+
+```sql
+-- Defined in sql/age_query.sql
+CREATE FUNCTION ag_catalog.get_cypher_keywords(
+    OUT word    text,
+    OUT catcode "char",
+    OUT catdesc text
+)
+RETURNS SETOF record
+LANGUAGE c
+STABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+COST 10
+ROWS 60
+AS 'MODULE_PATHNAME';
+```
+
+Query it like this:
+
+```sql
+SELECT word, catcode, catdesc
+FROM ag_catalog.get_cypher_keywords()
+ORDER BY word;
+```
+
+| Column | Description |
+|---|---|
+| `word` | The keyword string |
+| `catcode` | Single-character category code |
+| `catdesc` | Human-readable category description |
+
+---
+
+## Learn more
+
+<CardGroup cols={2}>
+  <Card title="Graph model" icon="diagram-project" href="/concepts/graph-model">
+    Vertices, edges, labels, and how they are stored.
+  </Card>
+  <Card title="agtype" icon="brackets-curly" href="/concepts/agtype">
+    The data type used for all Cypher return values.
+  </Card>
+</CardGroup>

@@ -1,0 +1,206 @@
+---
+title: "Node.js driver"
+description: "Connect to Apache AGE from Node.js using the pg package with automatic agtype parsing."
+---
+
+The Node.js driver (`pg-age`) wraps the [`pg`](https://node-postgres.com/) PostgreSQL client and registers a custom agtype type parser. Once configured with `setAGETypes()`, any agtype value returned by a Cypher query is automatically deserialised — you work with native JavaScript objects rather than raw strings.
+
+## Prerequisites
+
+- Node.js (LTS recommended)
+- npm or yarn
+- A running PostgreSQL instance with AGE installed
+
+## Installation
+
+<Tabs>
+  <Tab title="npm">
+    ```bash
+    npm install pg-age
+    ```
+  </Tab>
+  <Tab title="yarn">
+    ```bash
+    yarn add pg-age
+    ```
+  </Tab>
+</Tabs>
+
+The package depends on:
+
+```json
+{
+  "dependencies": {
+    "antlr4ts": "^0.5.0-alpha.4",
+    "pg": ">=8.0.0"
+  }
+}
+```
+
+## Connecting and registering agtype
+
+Call `setAGETypes()` after connecting to register the agtype OID parser. This must be done once per client instance before running Cypher queries.
+
+```typescript
+import { types, Client, QueryResultRow } from "pg";
+import { setAGETypes } from "pg-age";
+
+const config = {
+    user: 'postgres',
+    host: '127.0.0.1',
+    database: 'postgres',
+    password: 'postgres',
+    port: 25432,
+};
+
+const client = new Client(config);
+await client.connect();
+await setAGETypes(client, types);
+```
+
+`setAGETypes()` performs three setup steps automatically:
+
+1. Executes `LOAD 'age'` to load the extension into the session.
+2. Sets `search_path = ag_catalog, "$user", public`.
+3. Looks up the agtype OID and registers `AGTypeParse` as its deserialiser.
+
+### Creating the extension on first use
+
+If the connecting user has `SUPERUSER` or `CREATE` privilege, you can create the AGE extension automatically by passing `{ createExtension: true }`:
+
+```typescript
+await setAGETypes(client, types, { createExtension: true });
+```
+
+<Note>
+The `createExtension` option runs `CREATE EXTENSION IF NOT EXISTS age`. Only use this if the database role has sufficient privileges.
+</Note>
+
+## Creating a graph
+
+```typescript
+await client.query(`SELECT create_graph('age-first-time');`);
+```
+
+## Running Cypher queries
+
+Use the `queryCypher()` helper to safely execute Cypher statements. It validates the graph name, dollar-quotes the Cypher string, and builds the required SQL wrapper:
+
+```typescript
+import { queryCypher } from "pg-age";
+
+// CREATE nodes
+await queryCypher(
+    client,
+    'age-first-time',
+    `CREATE (a:Part {part_num: '123'}),
+            (b:Part {part_num: '345'}),
+            (c:Part {part_num: '456'}),
+            (d:Part {part_num: '789'})`,
+    [{ name: 'a' }]
+);
+
+// MATCH and return nodes
+const results = await queryCypher(
+    client,
+    'age-first-time',
+    'MATCH (a) RETURN a',
+    [{ name: 'a' }]
+);
+
+for (const row of results.rows) {
+    console.log(row.a);
+}
+```
+
+### Using the pg client directly
+
+You can also call `client.query()` directly. After `setAGETypes()` is called, agtype results are parsed automatically:
+
+```typescript
+await client.query(`
+    SELECT *
+    from cypher('age-first-time', $$
+        CREATE (a:Part {part_num: '123'}),
+               (b:Part {part_num: '345'})
+    $$) as (a agtype);
+`);
+
+const results: QueryResultRow = await client.query<QueryResultRow>(`
+    SELECT *
+    from cypher('age-first-time', $$
+        MATCH (a) RETURN a
+    $$) as (a agtype);
+`)!;
+```
+
+## Graph management utilities
+
+The driver exports helper functions for creating and dropping graphs:
+
+```typescript
+import { createGraph, dropGraph } from "pg-age";
+
+// Create a graph
+await createGraph(client, 'my_graph');
+
+// Drop a graph (cascade: false by default)
+await dropGraph(client, 'my_graph');
+
+// Drop with cascade to remove dependent objects
+await dropGraph(client, 'my_graph', true);
+```
+
+## Agtype parsing
+
+`setAGETypes()` registers `AGTypeParse` — an ANTLR 4-based parser — as the deserialiser for the agtype PostgreSQL type. After registration, agtype wire values are automatically converted to JavaScript objects when you fetch rows.
+
+You can also call `AGTypeParse` directly if you have a raw agtype string:
+
+```typescript
+import { AGTypeParse } from "pg-age";
+
+const vertex = AGTypeParse(
+    '{"id": 844424930131969, "label": "Person", "properties": {"name": "Alice"}}::vertex'
+);
+console.log(vertex);
+```
+
+## Graph name validation
+
+Both `queryCypher()` and the graph management functions validate graph names before building SQL statements. Valid graph names must:
+
+- Be at least 3 and at most 63 characters
+- Start with an ASCII letter or underscore
+- Contain only ASCII letters, digits, underscores, dots, and hyphens in the middle
+- End with an ASCII letter, digit, or underscore
+
+An `Error` is thrown if the name does not meet these rules, preventing SQL injection through the graph name parameter.
+
+## Exported API
+
+| Export | Description |
+|--------|-------------|
+| `setAGETypes(client, types, options?)` | Configure a `pg` Client for AGE — loads the extension, sets search path, registers the agtype parser |
+| `queryCypher(client, graphName, cypher, columns?)` | Execute a Cypher query safely with input validation and dollar-quoting |
+| `createGraph(client, graphName)` | Create a new AGE graph |
+| `dropGraph(client, graphName, cascade?)` | Drop an AGE graph |
+| `AGTypeParse(input)` | Parse a raw agtype string into a JavaScript value |
+| `validateGraphName(name)` | Validate a graph name string (throws on invalid input) |
+| `validateLabelName(name)` | Validate a label name string (throws on invalid input) |
+
+## Building from source
+
+```bash
+git clone https://github.com/apache/age.git
+cd age/drivers/nodejs
+
+npm install
+npm run build
+```
+
+Run the test suite:
+
+```bash
+npm test
+```
